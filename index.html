@@ -69,6 +69,11 @@
   .key.tonic { background: linear-gradient(180deg, var(--inst), color-mix(in srgb, var(--inst) 70%, #000)); color: #fff; box-shadow: 0 6px 0 color-mix(in srgb, var(--inst) 50%, #000); }
   .key.tonic small { color: rgba(255,255,255,.75); }
   .key.hit { transform: translateY(5px); box-shadow: 0 1px 0 #9a9385; filter: brightness(1.15); }
+  .keys.stacked { grid-auto-flow: row; grid-auto-rows: 1fr; grid-auto-columns: auto; gap: 8px; }
+  .keys.stacked .key { flex-direction: row; justify-content: flex-start; align-items: center; gap: 10px; padding: 0 0 0 18px; border-radius: 14px; box-shadow: 0 4px 0 #9a9385; font-size: 18px; }
+  .keys.stacked .key small { font-size: 13px; }
+  .keys.stacked .key.tonic { box-shadow: 0 4px 0 color-mix(in srgb, var(--inst) 50%, #000); }
+  .keys.stacked .key.hit { transform: translateY(3px); box-shadow: 0 1px 0 #9a9385; }
   .pads { position: absolute; inset: 8px; display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   .pad { border-radius: 14px; background: color-mix(in srgb, var(--pad, var(--inst)) 22%, var(--raise)); border: 1px solid color-mix(in srgb, var(--pad, var(--inst)) 50%, var(--line)); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; font-weight: 700; font-size: 15px; min-height: 0; }
   .pad small { font-weight: 400; font-size: 11px; color: var(--muted); }
@@ -87,6 +92,13 @@
   .string .lbl { position: absolute; bottom: 4px; font-size: 12px; color: var(--muted); background: rgba(0,0,0,.35); padding: 2px 6px; border-radius: 8px; }
   .string.hit::before { animation: twang .25s ease-out; background: #fff; }
   @keyframes twang { 0% { transform: scaleX(6); opacity: .8; } 100% { transform: scaleX(1); opacity: 1; } }
+  .strings.stacked { flex-direction: column; inset: 10px 12px; }
+  .strings.stacked .string { width: auto; height: 1px; align-items: center; justify-content: flex-end; }
+  .strings.stacked .string::before { top: auto; bottom: auto; left: 0; right: 0; width: auto; height: 3px; background: linear-gradient(90deg, #fff6d6, #cbb98a); }
+  .strings.stacked .string.tonic::before { background: linear-gradient(90deg, color-mix(in srgb, var(--inst) 40%, #fff), var(--inst)); }
+  .strings.stacked .string .lbl { bottom: auto; right: 4px; }
+  .strings.stacked .string.hit::before { animation: twangy .25s ease-out; }
+  @keyframes twangy { 0% { transform: scaleY(6); opacity: .8; } 100% { transform: scaleY(1); opacity: 1; } }
   .xy { position: absolute; inset: 8px; border-radius: 14px; background: repeating-linear-gradient(90deg, transparent 0, transparent calc(100% / var(--cols) - 1px), rgba(255,255,255,.08) calc(100% / var(--cols) - 1px), rgba(255,255,255,.08) calc(100% / var(--cols))), linear-gradient(180deg, rgba(255,255,255,.07), transparent); }
   .xy .lbls { position: absolute; left: 0; right: 0; bottom: 6px; display: grid; grid-template-columns: repeat(var(--cols), 1fr); text-align: center; font-size: 10px; color: var(--muted); pointer-events: none; }
   .xy .dot { position: absolute; width: 56px; height: 56px; border-radius: 50%; background: radial-gradient(circle, #fff 0%, var(--inst) 40%, transparent 70%); transform: translate(-50%, -50%); opacity: 0; pointer-events: none; }
@@ -462,10 +474,11 @@ const api = {
 
 // ---------- controllers ----------
 const CTRL = {};
+const stacked = () => { const s = $("surface"); return s.clientHeight > s.clientWidth * 1.1; };   // portrait: lay keys and strings bottom to top
 CTRL.keys = {
   mount(el, i) {
-    const k = api.scaleLen(), off = (i.kbOct || 0) * k, keys = document.createElement("div"); keys.className = "keys";
-    for (let j = 0; j <= k; j++) { const row = off + j, b = document.createElement("div"); b.className = "key" + (j % k === 0 ? " tonic" : ""); b.dataset.row = row; b.innerHTML = `${api.rowName(row)}<small>${G.SOLFEGE[j % k] || ""}</small>`; keys.appendChild(b); }
+    const k = api.scaleLen(), off = (i.kbOct || 0) * k, keys = document.createElement("div"), st = stacked(); keys.className = "keys" + (st ? " stacked" : "");
+    for (let j = 0; j <= k; j++) { const row = off + j, b = document.createElement("div"); b.className = "key" + (j % k === 0 ? " tonic" : ""); b.dataset.row = row; b.innerHTML = `${api.rowName(row)}<small>${G.SOLFEGE[j % k] || ""}</small>`; if (st) keys.prepend(b); else keys.appendChild(b); }
     el.appendChild(keys);
     const active = new Map(), keyAt = e => document.elementFromPoint(e.clientX, e.clientY)?.closest?.(".key");
     el.onpointerdown = e => { const key = keyAt(e); if (!key) return; el.setPointerCapture(e.pointerId); active.set(e.pointerId, key); key.classList.add("hit"); api.press("k" + e.pointerId, +key.dataset.row, 0.9); };
@@ -520,10 +533,11 @@ CTRL.kit = {
 };
 CTRL.strings = {
   mount(el, i) {
-    const k = api.scaleLen(), off = (i.kbOct || 0) * k, wrap = document.createElement("div"); wrap.className = "strings"; el.appendChild(wrap);
+    const k = api.scaleLen(), off = (i.kbOct || 0) * k, wrap = document.createElement("div"), st = stacked(); wrap.className = "strings" + (st ? " stacked" : ""); el.appendChild(wrap);
     const strings = [];
-    for (let j = 0; j <= k; j++) { const row = off + j, s = document.createElement("div"); s.className = "string" + (j % k === 0 ? " tonic" : ""); s.dataset.row = row; s.innerHTML = `<span class="lbl">${api.rowName(row)}</span>`; wrap.appendChild(s); strings.push(s); }
-    const idxAt = e => { const r = wrap.getBoundingClientRect(); return G.clamp(Math.floor((e.clientX - r.left) / r.width * strings.length), 0, strings.length - 1); };
+    for (let j = 0; j <= k; j++) { const row = off + j, s = document.createElement("div"); s.className = "string" + (j % k === 0 ? " tonic" : ""); s.dataset.row = row; s.innerHTML = `<span class="lbl">${api.rowName(row)}</span>`; if (st) wrap.prepend(s); else wrap.appendChild(s); strings.push(s); }
+    if (st) strings.reverse();   // strings[j] is the j-th string on screen (top to bottom when stacked)
+    const idxAt = e => { const r = wrap.getBoundingClientRect(); return st ? G.clamp(Math.floor((e.clientY - r.top) / r.height * strings.length), 0, strings.length - 1) : G.clamp(Math.floor((e.clientX - r.left) / r.width * strings.length), 0, strings.length - 1); };
     const last = new Map();
     const pluck = (s, vel) => { s.classList.remove("hit"); void s.offsetWidth; s.classList.add("hit"); api.pluck("s" + s.dataset.row + Math.random(), +s.dataset.row, vel, 2); };
     el.onpointerdown = e => { el.setPointerCapture(e.pointerId); const j = idxAt(e); last.set(e.pointerId, j); pluck(strings[j], 0.95); };
@@ -745,6 +759,8 @@ $("arrAdd").onclick = () => { const last = P.song[P.song.length - 1]; P.song.pus
 $("arrPlayAll").onclick = () => { soloPart = false; seq.setRange(null); seq.setMode("song"); $("modeSong").classList.add("on"); $("modeLoop").classList.remove("on"); if (!seq.playing) togglePlay(); renderTop(); renderArrange(); };
 $("arrPlayPart").onclick = () => { soloPart = !soloPart; seq.setRange(soloPart ? [selPart, selPart] : null); if (soloPart) { seq.setMode("song"); $("modeSong").classList.add("on"); $("modeLoop").classList.remove("on"); if (!seq.playing) togglePlay(); } renderTop(); renderArrange(); };
 new ResizeObserver(() => drawMini()).observe($("miniBtn"));
+let wasStacked = null, remountTimer = null;
+new ResizeObserver(() => { const now = stacked(); if (wasStacked === null) { wasStacked = now; return; } if (now !== wasStacked) { wasStacked = now; clearTimeout(remountTimer); remountTimer = setTimeout(() => { if (view === "play") mountController(); }, 120); } }).observe($("surface"));
 
 // ---------- sheets ----------
 function openSheet(id) { $("scrim").classList.add("open"); document.querySelectorAll(".sheet").forEach(s => s.classList.toggle("open", s.id === id)); }
