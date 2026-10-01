@@ -1,13 +1,18 @@
-/* YuE2 Groove Box — sound engine. FluidSynth (WebAssembly, via js-synthesizer) playing vendor/groovebox-gm.sf3,
-   with a small oscillator engine as the fallback while the SoundFont loads or when it can't. Exposes window.GrooveSynth.
+/* YuE2 Groove Box — sound engine. FluidSynth (WebAssembly, via js-synthesizer) with two sound sets:
+   "stage" = vendor/groovebox-gm.sf3 (3 MB, 27 presets) and "full" = the complete FluidR3Mono_GM SoundFont (24 MB,
+   fetched on demand). A small oscillator engine covers the first seconds and any failure. Exposes window.GrooveSynth.
    Channel plan: each stage instrument gets its own MIDI channel; drums are channel 9. */
 (function () {
 "use strict";
 const VENDOR = (document.currentScript && document.currentScript.src ? document.currentScript.src.replace(/[^/]*$/, "") : "") + "vendor/";
 const FLUID_JS = "libfluidsynth-2.3.0-with-libsndfile.js", SYNTH_JS = "js-synthesizer.js", WORKLET_JS = "js-synthesizer.worklet.js", SF = "groovebox-gm.sf3";
+const FULL_URL = () => (window.Groove && window.Groove.FULL_SOUNDFONT_URL) || "https://raw.githubusercontent.com/musescore/MuseScore/v3.6.2/share/sound/FluidR3Mono_GM.sf3";
 const E = { ac: null, master: null, noise: null, fluid: null, fluidNode: null, sfont: null, status: "idle", engine: "osc", error: "", volume: 0.8,
-            channels: new Map(), programs: new Map(), nextChannel: 0, timers: new Set(), live: new Map(), deck: [], drumProgram: 0 };
+            channels: new Map(), programs: new Map(), nextChannel: 0, timers: new Set(), live: new Map(), deck: [], drumProgram: 0,
+            set: "stage", wantSet: "stage", stageBuf: null, fullBuf: null, progress: null };
 const now = () => E.ac ? E.ac.currentTime : 0;
+const stageHas = program => { const G = window.Groove; return !G || G.SOUNDS.some(s => !s.drumkit && s.program === program); };
+const standIn = program => { const G = window.Groove; return G && G.STAGE_STANDIN[program] != null ? G.STAGE_STANDIN[program] : 4; };
 
 function ensure() {
   if (!E.ac) {
@@ -24,12 +29,26 @@ function ensure() {
   return true;
 }
 function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = () => rej(new Error("couldn't load " + src.split("/").pop())); document.head.appendChild(s); }); }
+async function fetchWithProgress(url, onFrac) {
+  const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 180000);   // 3 minutes for 24 MB, then give up with a clear message
+  let resp; try { resp = await fetch(url, { signal: ctl.signal }); } catch (e) { clearTimeout(timer); throw new Error(e.name === "AbortError" ? "the download took too long" : "no connection to the download"); }
+  if (!resp.ok) { clearTimeout(timer); throw new Error("download failed (" + resp.status + ")"); }
+  const total = +resp.headers.get("content-length") || 0;
+  if (!resp.body || !total) { const b = await resp.arrayBuffer(); clearTimeout(timer); return b; }
+  const reader = resp.body.getReader(), chunks = []; let got = 0;
+  for (;;) { const { done, value } = await reader.read(); if (done) break; chunks.push(value); got += value.length; onFrac(got / total); }
+  clearTimeout(timer);
+  const out = new Uint8Array(got); let o = 0; for (const c of chunks) { out.set(c, o); o += c.length; } return out.buffer;
+}
 
-// Load FluidSynth + the SoundFont. Safe to call more than once; resolves to the engine name.
+let progressCb = null;
+const progress = (msg, frac) => { E.progress = { msg, frac }; if (progressCb) progressCb(msg, frac); };
+
+// Load FluidSynth + the stage SoundFont. Safe to call more than once; resolves to the engine name.
 let loading = null;
 function load(onProgress) {
+  if (onProgress) progressCb = onProgress;
   if (loading) return loading;
-  const progress = (msg, frac) => { E.progress = { msg, frac }; if (onProgress) onProgress(msg, frac); };
   loading = (async () => {
     if (!ensure()) throw new Error("no Web Audio");
     E.status = "loading";
@@ -38,7 +57,7 @@ function load(onProgress) {
     await window.JSSynth.waitForReady();
     progress("Loading instruments…", 0.3);
     const resp = await fetch(VENDOR + SF); if (!resp.ok) throw new Error("SoundFont missing (" + resp.status + ")");
-    const sf = await resp.arrayBuffer();
+    E.stageBuf = await resp.arrayBuffer();
     progress("Warming up…", 0.7);
     let synth = null;
     try {   // AudioWorklet: rendering off the main thread, lowest latency
@@ -50,12 +69,39 @@ function load(onProgress) {
       synth = new window.JSSynth.Synthesizer(); synth.init(E.ac.sampleRate, { polyphony: 96 });
       E.fluidNode = synth.createAudioNode(E.ac, 2048); E.fluidNode.connect(E.master);
     }
-    E.sfont = await synth.loadSFont(sf);
+    E.sfont = await synth.loadSFont(E.stageBuf); E.set = "stage";
     E.fluid = synth; await applyPrograms();
     E.status = "ready"; E.engine = "fluid"; progress("Ready", 1);
+    if (E.wantSet === "full") loadSet("full");
     return "fluid";
   })().catch(err => { console.warn("FluidSynth unavailable:", err); E.status = "fallback"; E.engine = "osc"; E.error = err.message; progress("Using the built-in sketch sounds (" + err.message + ")", 1); return "osc"; });
   return loading;
+}
+
+// Switch between the stage set and the full General MIDI set. Resolves to the set actually in use.
+let switching = null;
+function loadSet(name) {
+  E.wantSet = name;
+  if (switching) return switching.then(() => E.set === name ? name : loadSet(name));
+  switching = (async () => {
+    if (E.engine !== "fluid") return E.set;
+    if (name === E.set) return name;
+    if (name === "full") {
+      if (!E.fullBuf) { progress("Downloading the full orchestra… 0%", 0.02); E.fullBuf = await fetchWithProgress(FULL_URL(), f => progress("Downloading the full orchestra… " + Math.round(f * 100) + "%", 0.02 + f * 0.8)); }
+      progress("Unpacking 128 instruments…", 0.85);
+      const id = await E.fluid.loadSFont(E.fullBuf);
+      if (E.sfont != null) await E.fluid.unloadSFont(E.sfont);
+      E.sfont = id; E.set = "full";
+    } else {
+      progress("Back to the stage set…", 0.5);
+      const id = await E.fluid.loadSFont(E.stageBuf);
+      if (E.sfont != null) await E.fluid.unloadSFont(E.sfont);
+      E.sfont = id; E.set = "stage";
+    }
+    await applyPrograms(); progress(E.set === "full" ? "Full General MIDI ready" : "Stage set ready", 1);
+    return E.set;
+  })().catch(err => { console.warn("sound set:", err); progress("Couldn't load that sound set (" + err.message + ")", 1); E.wantSet = E.set; return E.set; }).finally(() => { switching = null; });
+  return switching;
 }
 
 // ----- instruments -> channels -----
@@ -71,10 +117,12 @@ function setDeck(deck) {   // deck: [{id, role, sound: {program, drumkit}}]
   for (const role of Object.keys(defaults)) if (!E.channels.has(role)) { const ch = take(); E.channels.set(role, ch); E.programs.set(ch, defaults[role]); }
   if (E.fluid) applyPrograms();
 }
+function effectiveProgram(program) { return E.set === "full" || stageHas(program) ? program : standIn(program); }
+function effectiveKit(program) { return E.set === "full" || program === 0 || program === 25 ? program : 0; }
 async function applyPrograms() {
   if (!E.fluid) return;
-  for (const [ch, prog] of E.programs) { E.fluid.midiProgramSelect(ch, E.sfont, 0, prog); E.fluid.midiControl(ch, 91, 40); }
-  E.fluid.midiSetChannelType(9, true); E.fluid.midiProgramSelect(9, E.sfont, 128, E.drumProgram);
+  for (const [ch, prog] of E.programs) { E.fluid.midiProgramSelect(ch, E.sfont, 0, effectiveProgram(prog)); E.fluid.midiControl(ch, 91, 40); }
+  E.fluid.midiSetChannelType(9, true); E.fluid.midiProgramSelect(9, E.sfont, 128, effectiveKit(E.drumProgram));
 }
 function channelFor(key) { if (!E.channels.size) setDeck([]); return E.channels.has(key) ? E.channels.get(key) : E.channels.get("voice"); }
 function programOf(ch) { return E.programs.get(ch) || 0; }
@@ -105,7 +153,6 @@ function drum(gm, t, vel) {
   if (E.engine === "fluid") { at(t, () => { E.fluid.midiNoteOn(9, gm, Math.round(vel * 127)); }); at(t + 0.08, () => E.fluid.midiNoteOff(9, gm)); }
   else at(t, () => oscDrum(gm, now(), vel));
 }
-// Live (held) notes: key = anything unique per finger/note.
 function noteOn(key, ch, midi, vel) {
   if (!ensure()) return; vel = vel == null ? 0.9 : vel;
   noteOff(key);
@@ -143,7 +190,7 @@ function oscVoice(program, midi, t, vel) {
   const ac = E.ac, f = 440 * Math.pow(2, (midi - 69) / 12), bass = program >= 32 && program <= 39, voice = program === 52 || program === 53;
   const pluck = [24, 46, 107, 108, 12, 11, 114, 113, 115].includes(program);
   const o = ac.createOscillator(), o2 = ac.createOscillator(), filt = ac.createBiquadFilter(), g = ac.createGain(), o2g = ac.createGain();
-  o.type = bass ? "sawtooth" : voice ? "sine" : pluck ? "triangle" : "triangle"; o2.type = voice ? "triangle" : "sine";
+  o.type = bass ? "sawtooth" : voice ? "sine" : "triangle"; o2.type = voice ? "triangle" : "sine";
   o.frequency.value = f; o2.frequency.value = f * 2.001; o2.detune.value = 4; o2g.gain.value = voice ? 0.15 : 0.3;
   filt.type = "lowpass"; filt.frequency.setValueAtTime(bass ? 900 : 2600, t); if (bass) filt.frequency.exponentialRampToValueAtTime(220, t + 0.25);
   o.connect(filt); o2.connect(o2g); o2g.connect(filt); filt.connect(g); g.connect(E.master);
@@ -154,6 +201,6 @@ function oscVoice(program, midi, t, vel) {
   return { stop(t1) { g.gain.setTargetAtTime(0.0001, t1, 0.04); o.stop(t1 + 0.3); o2.stop(t1 + 0.3); } };
 }
 
-window.GrooveSynth = { ensure, now, load, setDeck, channelFor, note, chord, drum, noteOn, noteOff, allOff, setVolume,
-  get status() { return E.status; }, get engine() { return E.engine; }, get error() { return E.error; }, get progress() { return E.progress; }, get context() { return E.ac; } };
+window.GrooveSynth = { ensure, now, load, loadSet, setDeck, channelFor, note, chord, drum, noteOn, noteOff, allOff, setVolume,
+  get status() { return E.status; }, get engine() { return E.engine; }, get error() { return E.error; }, get progress() { return E.progress; }, get context() { return E.ac; }, get set() { return E.set; } };
 })();

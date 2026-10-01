@@ -149,7 +149,7 @@
       <input id="patName" type="text" aria-label="Loop name" style="width:150px">
       <label class="inl">Length <span class="seg" id="barsSeg"><button data-bars="1">1</button><button data-bars="2">2</button><button data-bars="4">4</button></span> bars</label>
       <label class="inl">Grid <span class="seg" id="gridSeg"><button data-grid="16">16ths</button><button data-grid="8">8ths</button></span></label>
-      <label class="inl">Meter <span class="seg" id="meterSeg"><button data-meter="4/4">4/4</button><button data-meter="3/4">3/4</button></span></label>
+      <label class="inl">Meter <span class="seg" id="meterSeg"></span></label>
     </div>
     <div class="barnav" style="margin-top:10px">
       <span class="muted">Bar</span><span class="seg" id="barSeg"></span>
@@ -530,6 +530,7 @@ $("resetDemo").onclick = () => armed($("resetDemo"), () => { loadProject(G.demoP
 
 // ---------- boot ----------
 G.KEYS.forEach(k => { const o = document.createElement("option"); o.value = o.textContent = k; $("key").appendChild(o); });
+G.METERS.forEach(m => { const b = document.createElement("button"); b.dataset.meter = m; b.textContent = m; $("meterSeg").appendChild(b); });
 Object.entries(G.SCALES).forEach(([id, s]) => { const o = document.createElement("option"); o.value = id; o.textContent = s.label; $("scale").appendChild(o); });
 NOTE_LENS.forEach(([len, label]) => { const b = document.createElement("button"); b.dataset.len = len; b.textContent = label; $("lenSeg").appendChild(b); });
 $("vol").value = 80;

@@ -65,7 +65,37 @@ const SOUNDS = [
   { id: "wood",    name: "Woodblock",        program: 115, role: "layer" },
   { id: "taiko",   name: "Taiko",            program: 116, role: "layer" },
 ];
-const SOUND_BY_ID = Object.fromEntries(SOUNDS.map(s => [s.id, s]));
+const GM_NAMES = ["Acoustic Grand Piano", "Bright Acoustic Piano", "Electric Grand Piano", "Honky-tonk Piano", "Electric Piano 1", "Electric Piano 2", "Harpsichord", "Clavinet",
+  "Celesta", "Glockenspiel", "Music Box", "Vibraphone", "Marimba", "Xylophone", "Tubular Bells", "Dulcimer",
+  "Drawbar Organ", "Percussive Organ", "Rock Organ", "Church Organ", "Reed Organ", "Accordion", "Harmonica", "Tango Accordion",
+  "Nylon Guitar", "Steel Guitar", "Jazz Guitar", "Clean Electric Guitar", "Muted Electric Guitar", "Overdriven Guitar", "Distortion Guitar", "Guitar Harmonics",
+  "Acoustic Bass", "Finger Bass", "Pick Bass", "Fretless Bass", "Slap Bass 1", "Slap Bass 2", "Synth Bass 1", "Synth Bass 2",
+  "Violin", "Viola", "Cello", "Contrabass", "Tremolo Strings", "Pizzicato Strings", "Harp", "Timpani",
+  "String Ensemble 1", "String Ensemble 2", "Synth Strings 1", "Synth Strings 2", "Choir Aahs", "Voice Oohs", "Synth Voice", "Orchestra Hit",
+  "Trumpet", "Trombone", "Tuba", "Muted Trumpet", "French Horn", "Brass Section", "Synth Brass 1", "Synth Brass 2",
+  "Soprano Sax", "Alto Sax", "Tenor Sax", "Baritone Sax", "Oboe", "English Horn", "Bassoon", "Clarinet",
+  "Piccolo", "Flute", "Recorder", "Pan Flute", "Blown Bottle", "Shakuhachi", "Whistle", "Ocarina",
+  "Square Lead", "Saw Lead", "Calliope Lead", "Chiff Lead", "Charang Lead", "Voice Lead", "Fifths Lead", "Bass + Lead",
+  "New Age Pad", "Warm Pad", "Polysynth Pad", "Choir Pad", "Bowed Pad", "Metallic Pad", "Halo Pad", "Sweep Pad",
+  "Rain", "Soundtrack", "Crystal", "Atmosphere", "Brightness", "Goblins", "Echoes", "Sci-Fi",
+  "Sitar", "Banjo", "Shamisen", "Koto", "Kalimba", "Bagpipe", "Fiddle", "Shanai",
+  "Tinkle Bell", "Agogo", "Steel Drums", "Woodblock", "Taiko Drum", "Melodic Tom", "Synth Drum", "Reverse Cymbal",
+  "Guitar Fret Noise", "Breath Noise", "Seashore", "Bird Tweet", "Telephone Ring", "Helicopter", "Applause", "Gunshot"];
+const GM_FAMILIES = ["Piano", "Chromatic percussion", "Organ", "Guitar", "Bass", "Strings", "Ensemble", "Brass", "Reed", "Pipe", "Synth lead", "Synth pad", "Synth effects", "Ethnic", "Percussive", "Sound effects"];
+const GM_KITS = [[0, "Standard kit"], [8, "Room kit"], [16, "Power kit"], [24, "Electronic kit"], [25, "TR-808"], [32, "Jazz kit"], [40, "Brush kit"], [48, "Orchestra kit"]];
+const STAGE_PROGRAMS = new Set(SOUNDS.filter(s => !s.drumkit).map(s => s.program)), STAGE_KITS = new Set([0, 25]);
+// Every General MIDI program as a sound ("gm12"), plus every kit ("kit8"); the stage set covers a subset of these.
+const GM_SOUNDS = GM_NAMES.map((name, program) => ({ id: "gm" + program, name, program, role: program >= 32 && program <= 39 ? "bass" : [52, 53, 54, 85].includes(program) ? "voice" : "layer", family: GM_FAMILIES[Math.floor(program / 8)], full: !STAGE_PROGRAMS.has(program) }))
+  .concat(GM_KITS.map(([program, name]) => ({ id: "kit" + program, name, program, role: "drums", drumkit: true, family: "Drum kits", full: !STAGE_KITS.has(program) })));
+const SOUND_BY_ID = Object.fromEntries(SOUNDS.concat(GM_SOUNDS).map(s => [s.id, s]));
+// Nearest stage-set stand-in for a program the small SoundFont doesn't hold (same GM family where possible).
+const STAGE_STANDIN = { 0: 4, 1: 4, 2: 4, 3: 4, 5: 4, 6: 4, 7: 4, 8: 11, 9: 11, 10: 11, 13: 12, 14: 11, 15: 108, 16: 4, 17: 4, 18: 4, 19: 88, 20: 88, 21: 4, 22: 73, 23: 4,
+  25: 24, 26: 24, 27: 24, 28: 24, 29: 81, 30: 81, 31: 24, 32: 33, 34: 33, 35: 33, 36: 38, 37: 38, 39: 38, 40: 48, 41: 48, 42: 48, 43: 33, 44: 48, 45: 46, 47: 116,
+  49: 48, 50: 48, 51: 88, 54: 53, 55: 48, 57: 56, 58: 56, 59: 56, 60: 56, 61: 56, 62: 81, 63: 81, 64: 65, 66: 65, 67: 65, 68: 73, 69: 73, 70: 65, 71: 73,
+  72: 73, 74: 73, 75: 73, 76: 73, 77: 73, 78: 73, 79: 73, 82: 80, 83: 80, 84: 81, 85: 53, 86: 81, 87: 38, 89: 88, 90: 88, 91: 52, 92: 88, 93: 88, 94: 88, 95: 88,
+  96: 88, 97: 88, 98: 108, 99: 88, 100: 88, 101: 88, 102: 88, 103: 88, 104: 107, 105: 24, 106: 107, 109: 73, 110: 48, 111: 65, 112: 113, 117: 116, 118: 116, 119: 46,
+  120: 115, 121: 73, 122: 88, 123: 73, 124: 113, 125: 116, 126: 115, 127: 116 };
+const FULL_SOUNDFONT_URL = "https://raw.githubusercontent.com/musescore/MuseScore/v3.6.2/share/sound/FluidR3Mono_GM.sf3";
 // Controllers (input widgets) and which roles they can drive. The stage implements them.
 const CONTROLLERS = [
   { id: "keys",    name: "Keys",        blurb: "Big scale keys. Hold for longer notes.",            roles: ["voice", "bass", "layer"] },
@@ -73,7 +103,8 @@ const CONTROLLERS = [
   { id: "kit",     name: "Drum kit",    blurb: "A drawn kit on stage. Tap the pieces.",              roles: ["drums"] },
   { id: "strings", name: "Strings",     blurb: "Pluck or strum across the strings.",                 roles: ["voice", "bass", "layer"] },
   { id: "xy",      name: "Slide pad",   blurb: "Glide a finger: left-right is pitch, up is louder.", roles: ["voice", "bass", "layer"] },
-  { id: "bubbles", name: "Bubbles",     blurb: "Drifting notes. Pop them.",                          roles: ["voice", "layer"] },
+  { id: "grid",    name: "Light grid",  blurb: "Tap the beats you want lit; the loop sweeps through them.", roles: ["voice", "bass", "layer", "drums"] },
+  { id: "rings",   name: "Rings",       blurb: "Concentric rings, low outside to high inside. Tap or drag.", roles: ["voice", "bass", "layer"] },
   { id: "chords",  name: "Chord pads",  blurb: "One tap plays a whole chord and sets the bar.",      roles: ["chords"] },
 ];
 const ROLE_LABEL = { voice: "Voice (the sung line)", bass: "Bass line", drums: "Drums", chords: "Chords", layer: "Extra layer" };
@@ -93,7 +124,7 @@ function defaultDeck() {
     { id: "drums",   name: "Drums",   sound: "kit",     controller: "kit",     role: "drums",  octave: 0,  color: "#e2574c" },
     { id: "bass",    name: "Bass",    sound: "fbass",   controller: "strings", role: "bass",   octave: -2, color: "#3fa7d6" },
     { id: "chords",  name: "Chords",  sound: "epiano",  controller: "chords",  role: "chords", octave: 0,  color: "#9b6bde" },
-    { id: "kalimba", name: "Kalimba", sound: "kalimba", controller: "bubbles", role: "layer",  octave: 1,  color: "#5cc98a" },
+    { id: "kalimba", name: "Kalimba", sound: "kalimba", controller: "grid",    role: "layer",  octave: 1,  color: "#5cc98a" },
   ];
 }
 function demoProject() {
@@ -132,18 +163,22 @@ function normalizeProject(p) {
   p.song = (p.song || []).filter(s => p.patterns.some(q => q.id === s.pattern));
   if (!p.song.length) p.song = [{ pattern: p.patterns[0].id, repeat: 1, section: "verse" }];
   if (!SCALES[p.scale]) p.scale = "major"; if (!KEYS.includes(p.key)) p.key = "C";
-  p.grid = p.grid === 8 ? 8 : 16; p.meter = p.meter === "3/4" ? "3/4" : "4/4";
+  p.grid = p.grid === 8 ? 8 : 16; p.meter = METERS.includes(p.meter) ? p.meter : "4/4";
+  p.style = p.style || ""; p.lyrics = p.lyrics || ""; p.soundSet = p.soundSet === "full" ? "full" : "stage";
   p.bpm = clamp(+p.bpm || 100, 60, 180); p.swing = clamp(+p.swing || 0, 0, 60); p.octave = clamp(+p.octave || 0, -1, 1);
   if (!Array.isArray(p.deck) || !p.deck.length) p.deck = defaultDeck();
-  p.deck = p.deck.filter(i => SOUND_BY_ID[i.sound] && CONTROLLERS.some(c => c.id === i.controller)).map(i => ({ octave: 0, color: "#888", ...i, role: SOUND_BY_ID[i.sound].role }));
+  p.deck = (p.deck || []).map(i => i.controller === "bubbles" ? { ...i, controller: "grid" } : i);
+  p.deck = p.deck.filter(i => SOUND_BY_ID[i.sound] && CONTROLLERS.some(c => c.id === i.controller)).map(i => ({ octave: 0, color: "#888", ...i, role: i.role === "chords" ? "chords" : SOUND_BY_ID[i.sound].role }));
   if (!p.deck.length) p.deck = defaultDeck();
   p.version = 2;
   return p;
 }
 
 // ---------- music helpers (bound to a project) ----------
-function beats(P) { return +P.meter.split("/")[0]; }
-function spb(P) { return beats(P) * P.grid / 4; }
+const METERS = ["4/4", "3/4", "2/4", "6/8", "9/8", "12/8"];
+function meterParts(m) { const mm = /^(\d+)\/(\d+)$/.exec(m || "4/4"); return mm ? [+mm[1], +mm[2]] : [4, 4]; }
+function beats(P) { const [n, d] = meterParts(P.meter); return n * 4 / d; }        // quarter-note beats per bar
+function spb(P) { const [n, d] = meterParts(P.meter); return Math.round(n / d * P.grid); }  // steps per bar
 function scaleDef(P) { return SCALES[P.scale]; }
 function nRows(P) { return scaleDef(P).steps.length * 2 + 1; }
 function tonicPc(P) { return KEYS.indexOf(P.key); }
@@ -269,6 +304,33 @@ function copyBarNext(P, p, bar) {
   p.chords[bar + 1] = p.chords[bar]; return true;
 }
 
+// ---------- per-instrument content (for the arrangement views) ----------
+function instEvents(P, p, inst, bar) {   // events of an instrument in a pattern (optionally one bar): [{step, len?}]
+  const n = spb(P), inBar = x => bar == null || (x.step >= bar * n && x.step < (bar + 1) * n);
+  switch (inst.role) {
+    case "voice": return p.melody.filter(inBar);
+    case "drums": { const out = []; for (const d of DRUMS) for (const s of p.drums[d.id]) if (bar == null || (s >= bar * n && s < (bar + 1) * n)) out.push({ step: s, len: 1 }); return out; }
+    case "bass": return (p.layers.bass || []).filter(inBar);
+    case "chords": { const out = []; p.chords.forEach((c, b) => { if (c >= 0 && (bar == null || b === bar)) out.push({ step: b * n, len: n }); }); return out; }
+    default: return (p.layers[inst.id] || []).filter(inBar);
+  }
+}
+function density(P, p, inst, bar) {   // 0..1: how busy an instrument is, per bar
+  const n = spb(P), bars = bar == null ? p.bars : 1, ev = instEvents(P, p, inst, bar);
+  const cap = inst.role === "drums" ? n * 1.5 : inst.role === "chords" ? 1 : n / 2;
+  return Math.min(1, ev.length / (cap * bars));
+}
+function clearInstrument(P, p, inst, bar) {   // remove an instrument's content from a pattern (or one bar of it)
+  const n = spb(P), keep = x => bar != null && (x.step < bar * n || x.step >= (bar + 1) * n);
+  switch (inst.role) {
+    case "voice": p.melody = p.melody.filter(keep); break;
+    case "drums": for (const d of DRUMS) p.drums[d.id] = p.drums[d.id].filter(s => bar != null && (s < bar * n || s >= (bar + 1) * n)); break;
+    case "bass": if (p.layers.bass) p.layers.bass = p.layers.bass.filter(keep); break;
+    case "chords": if (bar == null) p.chords = p.chords.map(() => -1); else p.chords[bar] = -1; break;
+    default: if (p.layers[inst.id]) p.layers[inst.id] = p.layers[inst.id].filter(keep);
+  }
+}
+
 // ---------- ABC export ----------
 const MULTS = [48, 32, 24, 16, 12, 8, 6, 4, 3, 2, 1];
 function rests(n) { let s = ""; for (const m of MULTS) while (n >= m) { s += "z" + (m === 1 ? "" : m); n -= m; } return s; }
@@ -357,7 +419,7 @@ function scorePackage(P, abc) {
 // Bar-length check in the Score Studio's terms (same tokenizer as docs/index.html, plus bracket chords).
 const TOKEN = /"[^"]*"|\[[A-Za-z]:[^\]]*\]|\[[^\]]+\]\d*|[_^=]*[A-Ga-g][',]*\d*-?|z\d*|Z\d*|\s+|./g;
 function checkAbc(P, abc) {
-  const want = beats(P) / 4 * P.grid, issues = [], bars = {}; let voice = null, section = 0;
+  const want = spb(P), issues = [], bars = {}; let voice = null, section = 0;
   for (const line of abc.split("\n")) {
     if (/^%\s*\S/.test(line) && !/^%%/.test(line)) { section++; voice = null; continue; }
     const v = /^\[?V:\s*(\S+?)\]?\s*$/.exec(line); if (v) { voice = v[1]; continue; }
@@ -417,13 +479,13 @@ function download(blob, name) { const a = document.createElement("a"); a.href = 
 
 // ---------- sequencer (shared; plays through a synth with note(ch, midi, t, dur, vel) / drum(gm, t, vel) / channelFor(inst)) ----------
 function Sequencer(opts) {   // opts: project(), currentPattern(), synth(), onStep(sIn, entry, p), options()
-  const S = { playing: false, mode: "loop", pos: 0, nextTime: 0, anchorTime: 0, timer: null, seq: [], total: 0, uiTimers: [] };
+  const S = { playing: false, mode: "loop", pos: 0, nextTime: 0, anchorTime: 0, timer: null, seq: [], total: 0, uiTimers: [], range: null };
   const P = () => opts.project(), synth = () => opts.synth(), now = () => synth().now();
   const stepDur = () => 60 / P().bpm / (P().grid / 4);
   function buildSeq() {
     const out = [], cur = opts.currentPattern();
     if (S.mode === "loop") { for (let b = 0; b < cur.bars; b++) out.push({ pid: cur.id, bar: b, part: -1 }); }
-    else P().song.forEach((part, pi) => { const p = byId(P(), part.pattern); for (let r = 0; r < part.repeat; r++) for (let b = 0; b < p.bars; b++) out.push({ pid: p.id, bar: b, part: pi }); });
+    else P().song.forEach((part, pi) => { if (S.range && (pi < S.range[0] || pi > S.range[1])) return; const p = byId(P(), part.pattern); for (let r = 0; r < part.repeat; r++) for (let b = 0; b < p.bars; b++) out.push({ pid: p.id, bar: b, part: pi }); });
     return out.length ? out : [{ pid: cur.id, bar: 0, part: -1 }];
   }
   function start() {
@@ -463,10 +525,171 @@ function Sequencer(opts) {   // opts: project(), currentPattern(), synth(), onSt
   function stepsHeld(seconds) { return Math.max(1, Math.round(seconds / stepDur())); }
   function retime() { if (S.playing) S.anchorTime = S.nextTime - S.pos * stepDur(); }
   function setMode(m) { S.mode = m; if (S.playing) start(); }
-  return { state: S, start, stop, quantizedHit, stepsHeld, retime, setMode, stepDur, get playing() { return S.playing; }, get mode() { return S.mode; } };
+  function setRange(r) { S.range = r; if (S.playing && S.mode === "song") start(); }
+  function position() {   // fraction of the whole sequence that has played, for a playhead
+    if (!S.playing) return 0; const n = spb(P()), sd = stepDur();
+    let pos = Math.floor((now() - S.anchorTime) / sd); pos = ((pos % S.total) + S.total) % S.total;
+    return { frac: pos / S.total, entry: S.seq[Math.floor(pos / n)], sIn: pos % n, pos, total: S.total };
+  }
+  return { state: S, start, stop, quantizedHit, stepsHeld, retime, setMode, setRange, position, stepDur, get playing() { return S.playing; }, get mode() { return S.mode; }, get range() { return S.range; } };
 }
 
-window.Groove = { uid, clone, clamp, KEYS, SCALES, DRUMS, DRUM_BY_ID, SECTION_TYPES, SOUNDS, SOUND_BY_ID, CONTROLLERS, ROLE_LABEL, SOLFEGE,
+// ---------- standard ABC import (single voice + chord symbols, e.g. the Nottingham collection) ----------
+const MODE_DEGREE = { ion: 0, maj: 0, "": 0, dor: 1, phr: 2, lyd: 3, mix: 4, aeo: 5, min: 5, m: 5, loc: 6 };
+const MAJOR_STEPS = [0, 2, 4, 5, 7, 9, 11];
+const MODE_SCALE = { 0: "major", 1: "dorian", 2: "minor", 3: "major", 4: "mixolydian", 5: "minor", 6: "minor" };
+const ENHARMONIC = { "C#": "Db", "D#": "Eb", "G#": "Ab", "A#": "Bb", "Gb": "F#", "Cb": "B", "Fb": "E", "E#": "F", "B#": "C" };
+function parseKeyField(text) {
+  const m = /^\s*([A-Ga-g])([#b]?)\s*([A-Za-z]*)/.exec(text || "C");
+  if (!m) return null;
+  const letter = m[1].toUpperCase(), acc = m[2], modeWord = m[3].toLowerCase().slice(0, 3);
+  const deg = MODE_DEGREE[modeWord in MODE_DEGREE ? modeWord : (m[3].toLowerCase() === "minor" ? "min" : "")] ?? 0;
+  const tonicPc = (NATURAL[LETTERS.indexOf(letter)] + (acc === "#" ? 1 : acc === "b" ? -1 : 0) + 12) % 12;
+  const li = (LETTERS.indexOf(letter) - deg + 7) % 7, majPc = (tonicPc - MAJOR_STEPS[deg] + 12) % 12;
+  let alt = ((majPc - NATURAL[li]) % 12 + 18) % 12 - 6;
+  const majName = LETTERS[li] + (alt === 1 ? "#" : alt === -1 ? "b" : "");
+  const f = FIFTHS[majName] ?? 0, sig = {};
+  for (let i = 0; i < Math.abs(f); i++) sig[(f > 0 ? SHARP_ORDER : FLAT_ORDER)[i]] = f > 0 ? 1 : -1;
+  const keyName = ENHARMONIC[letter + acc] || (letter + acc);
+  return { tonicPc, sig, scale: MODE_SCALE[deg], key: KEYS.includes(keyName) ? keyName : KEYS[tonicPc] };
+}
+const ABC_TOKEN = /"[^"]*"|![^!\n]*!|\+[^+\n]*\+|\{[^}]*\}|\[[A-Za-z]:[^\]]*\]|\[[12]|\|[12]|\|:|:\||::|\|\]|\[\||\|\||\||\(\d(?::\d*)?(?::\d*)?|[()]|\[[^\]]+\]\d*\/*\d*|[_^=]*[A-Ga-g][,']*\d*\/*\d*-?|[zxZ]\d*\/*\d*|[<>]+|\\\n|\s+|./g;
+function abcDur(numText, slashes, denText, unit) {
+  const num = numText ? +numText : 1;
+  const den = denText ? +denText : (slashes ? Math.pow(2, slashes.length) : 1);
+  return unit * num / den;
+}
+function importAbc(P, text) {
+  const warnings = [], lines = text.replace(/\r/g, "").split("\n");
+  let title = "", meter = "4/4", unit = null, keyField = "C", bpm = null, body = [];
+  let seenKey = false;
+  for (const raw of lines) {
+    const line = raw.replace(/%.*$/, "");
+    const f = /^([A-Za-z]):(.*)$/.exec(line);
+    if (f && !(seenKey && /^[A-Ga-gz\[\|"]/.test(line))) {
+      const v = f[2].trim();
+      if (f[1] === "T" && !title) title = v;
+      else if (f[1] === "M") { if (!seenKey || !body.join("").trim()) meter = v; else { body.push("[M:" + v + "]"); } }
+      else if (f[1] === "L") unit = v;
+      else if (f[1] === "Q") bpm = v;
+      else if (f[1] === "K") { if (!seenKey) { keyField = v; seenKey = true; } else body.push("[K:" + v + "]"); }
+      else if (f[1] === "w" || f[1] === "W") { /* lyrics: dropped */ }
+      continue;
+    }
+    if (seenKey && line.trim()) body.push(line);
+  }
+  if (!seenKey) throw new Error("No K: key line.");
+  if (meter === "C") meter = "4/4"; if (meter === "C|") meter = "2/2";
+  let [mn, md] = (/^(\d+)\/(\d+)$/.exec(meter) || [0, 4, 4]).slice(1).map(Number);
+  if (!mn) throw new Error("No usable M: meter.");
+  const barLen = mn / md;
+  if (!unit) unit = barLen < 0.75 ? "1/16" : "1/8";
+  const um = /^(\d+)\/(\d+)$/.exec(unit); const unitVal = um ? +um[1] / +um[2] : 1 / 8;
+  const meterName = meter === "2/2" ? "4/4" : meter;
+  if (!METERS.includes(meterName)) throw new Error("Meter " + meter + " isn't supported (use 4/4, 3/4, 2/4, 6/8, 9/8 or 12/8).");
+  const grid = 16, stepsPerBar = Math.round(barLen * grid), compound = md === 8 && mn % 3 === 0;
+  let key = parseKeyField(keyField); if (!key) throw new Error("Couldn't read the key " + keyField);
+  const firstKey = key;
+  if (bpm) { const q = /(?:(\d+)\/(\d+)\s*=\s*)?(\d+)/.exec(bpm); if (q) bpm = Math.round(+q[3] * (q[1] ? (+q[1] / +q[2]) / 0.25 : 1)); else bpm = null; }
+
+  // ---- pass 1: tokens -> bars of events (time in whole notes within the bar) ----
+  const bars = [];                      // [{events: [{t, dur, midi|null, chord?}], len}]
+  let cur = { events: [], len: 0, accidentals: {} };
+  let repeatStart = 0, ending1 = -1, tuplet = null, broken = 0, pendingChord = null, lastNote = null, tie = false;
+  const noteMidi = (acc, letter, marks) => {
+    const L = letter.toUpperCase(), oct = (letter === L ? 4 : 5) + (marks.split("'").length - 1) - (marks.split(",").length - 1);
+    const k = L + oct;
+    let alter;
+    if (acc) { alter = acc === "^^" ? 2 : acc === "^" ? 1 : acc === "=" ? 0 : acc === "_" ? -1 : -2; cur.accidentals[k] = alter; }
+    else alter = k in cur.accidentals ? cur.accidentals[k] : (key.sig[L] || 0);
+    return (oct + 1) * 12 + NATURAL[LETTERS.indexOf(L)] + alter;
+  };
+  const pushEvent = (dur, midi) => {
+    if (tuplet) { dur *= tuplet.factor; if (--tuplet.left <= 0) tuplet = null; }
+    if (broken) { dur *= broken > 0 ? 1.5 : 0.5; if (lastNote) lastNote.dur *= broken > 0 ? 0.5 : 1.5; broken = 0; }
+    const ev = { t: cur.len, dur, midi, chord: pendingChord }; pendingChord = null;
+    if (tie && lastNote && midi != null && lastNote.midi === midi) { lastNote.dur += dur; cur.len += dur; tie = false; return; }
+    tie = false; cur.events.push(ev); cur.len += dur; if (midi != null) lastNote = ev;
+  };
+  const closeBar = () => {
+    if (cur.events.length || cur.len > 0) {
+      if (cur.len > barLen + 1e-6 && bars.length) { const over = cur.len - barLen; const last = cur.events[cur.events.length - 1]; if (last) last.dur = Math.max(1e-6, last.dur - over); cur.len = barLen; }
+      bars.push({ events: cur.events, len: cur.len });
+      // a pickup bar at the very start is not part of an implicit repeat: the first ending supplies the pickup
+      if (bars.length === 1 && cur.len < barLen - 1e-6 && repeatStart === 0) repeatStart = 1;
+    }
+    cur = { events: [], len: 0, accidentals: {} }; lastNote = null;
+  };
+  const doRepeat = () => {
+    closeBar();
+    const bodyEnd = ending1 >= 0 ? ending1 : bars.length;
+    const body = bars.slice(repeatStart, bodyEnd).map(b => ({ events: b.events.map(e => ({ ...e })), len: b.len }));
+    bars.push(...body); ending1 = -1; repeatStart = bars.length;
+  };
+  for (const tok of body.join("\n").match(ABC_TOKEN) || []) {
+    if (/^\s+$/.test(tok) || tok === "\\\n" || tok === "(" || tok === ")") continue;
+    if (tok[0] === '"') { if (!/^"[\^_<>@]/.test(tok)) pendingChord = tok.slice(1, -1); continue; }
+    if (tok[0] === "!" || tok[0] === "+" || tok[0] === "{") continue;
+    if (/^\[[A-Za-z]:/.test(tok)) { const f = tok[1], v = tok.slice(3, -1).trim(); if (f === "K") { const k2 = parseKeyField(v); if (k2) key = { ...k2, scale: firstKey.scale, key: firstKey.key }; } else if (f === "M" && v !== meter) { warnings.push("Meter changes to " + v + " mid-tune; the import stops there."); break; } continue; }
+    if (tok === "[1" || tok === "|1") { closeBar(); ending1 = bars.length; continue; }
+    if (tok === "[2" || tok === "|2") { closeBar(); continue; }
+    if (tok === "|:") { closeBar(); repeatStart = bars.length; continue; }
+    if (tok === ":|") { doRepeat(); continue; }
+    if (tok === "::") { doRepeat(); repeatStart = bars.length; continue; }
+    if (tok === "||" || tok === "|]" || tok === "[|") { closeBar(); repeatStart = bars.length; continue; }
+    if (tok === "|") { closeBar(); continue; }
+    if (tok[0] === "(" && /\d/.test(tok[1])) { const [pq, qq, rq] = tok.slice(1).split(":"); const pN = +pq, q = qq ? +qq : (pN === 3 ? 2 : pN === 2 || pN === 4 || pN === 8 ? 3 : compound ? 3 : 2), r = rq ? +rq : pN; tuplet = { factor: q / pN, left: r }; continue; }
+    if (/^[<>]+$/.test(tok)) { broken = tok[0] === ">" ? tok.length : -tok.length; continue; }
+    if (tok[0] === "[") {   // chord in brackets: keep the highest note
+      const inner = tok.slice(1, tok.indexOf("]")), tail = /\](\d*)(\/*)(\d*)$/.exec(tok);
+      const notes = inner.match(/[_^=]*[A-Ga-g][,']*\d*\/*\d*/g) || []; if (!notes.length) continue;
+      let best = null, dur = null;
+      for (const nt of notes) { const m = /^([_^=]*)([A-Ga-g])([,']*)(\d*)(\/*)(\d*)$/.exec(nt); const midi = noteMidi(m[1], m[2], m[3]); if (best == null || midi > best) { best = midi; } if (dur == null) dur = abcDur(m[4], m[5], m[6], unitVal); }
+      if (tail && (tail[1] || tail[2])) dur = abcDur(tail[1], tail[2], tail[3], dur);
+      pushEvent(dur, best); continue;
+    }
+    let m = /^([_^=]*)([A-Ga-g])([,']*)(\d*)(\/*)(\d*)(-?)$/.exec(tok);
+    if (m) { pushEvent(abcDur(m[4], m[5], m[6], unitVal), noteMidi(m[1], m[2], m[3])); if (m[7]) tie = true; continue; }
+    m = /^([zxZ])(\d*)(\/*)(\d*)$/.exec(tok);
+    if (m) { if (m[1] === "Z") { closeBar(); for (let i = 0; i < (+m[2] || 1); i++) bars.push({ events: [], len: barLen }); } else pushEvent(abcDur(m[2], m[3], m[4], unitVal), null); continue; }
+  }
+  closeBar();
+  if (!bars.length) throw new Error("No notes found.");
+  // pickup bar: a short first bar is pushed to the end of its bar
+  if (bars[0].len < barLen - 1e-6) { const pad = barLen - bars[0].len; bars[0].events.forEach(e => { e.t += pad; }); bars[0].len = barLen; }
+  // short bars elsewhere (end of a part before a repeat sign, final bar) are padded with silence
+  for (const b of bars) if (b.len < barLen - 1e-6) b.len = barLen;
+
+  // ---- pass 2: bars -> patterns of 4 bars in the project's model ----
+  const draft = { ...P, key: firstKey.key, scale: firstKey.scale, meter: meterName, grid, octave: 0 };
+  const midis = []; for (const b of bars) for (const e of b.events) if (e.midi != null) midis.push(e.midi);
+  let bestOct = 0, bestErr = Infinity;
+  for (const oct of [-1, 0, 1]) { draft.octave = oct; let err = 0; for (const m of midis) err += Math.abs(midiOfRow(draft, rowOfMidi(draft, m)) - m); if (err < bestErr) { bestErr = err; bestOct = oct; } }
+  draft.octave = bestOct;
+  const approx = midis.filter(m => midiOfRow(draft, rowOfMidi(draft, m)) !== m).length;
+  if (approx) warnings.push(approx + " note(s) outside the " + draft.key + " " + draft.scale + " scale were moved to the nearest scale note.");
+  const ps = parentSteps(draft), tonic = tonicPc(draft);
+  const chordDegree = sym => { const m = /^([A-G])([#b]?)/.exec(sym || ""); if (!m) return -1; const pc = pitchClass(m[1] + m[2]); for (let d = 0; d < 7; d++) if ((tonic + ps[d]) % 12 === pc) return d; return -1; };
+  const patterns = [], song = [];
+  for (let i = 0; i < bars.length; i += 4) {
+    const chunk = bars.slice(i, i + 4), pat = newPattern("Tune " + (patterns.length + 1), chunk.length);
+    chunk.forEach((b, bi) => {
+      let chord = -1;
+      for (const e of b.events) if (e.chord && chord < 0) chord = chordDegree(e.chord);
+      pat.chords[bi] = chord;
+      for (const e of b.events) {
+        if (e.midi == null) continue;
+        const start = clamp(Math.round(e.t * grid), 0, stepsPerBar - 1), end = clamp(Math.round((e.t + e.dur) * grid), start + 1, stepsPerBar);
+        addMelodyNote(draft, pat, bi * stepsPerBar + start, rowOfMidi(draft, e.midi), end - start);
+      }
+    });
+    patterns.push(pat); song.push({ pattern: pat.id, repeat: 1, section: Math.floor(i / 8) % 2 === 0 ? "verse" : "chorus" });
+  }
+  return { patterns, song, key: draft.key, scale: draft.scale, meter: meterName, grid, octave: bestOct, bpm, title: title || "Imported tune", bars: bars.length, warnings };
+}
+
+window.Groove = { uid, clone, clamp, KEYS, SCALES, DRUMS, DRUM_BY_ID, SECTION_TYPES, METERS, SOUNDS, GM_SOUNDS, GM_FAMILIES, SOUND_BY_ID, STAGE_STANDIN, FULL_SOUNDFONT_URL, CONTROLLERS, ROLE_LABEL, SOLFEGE,
+  meterParts, instEvents, density, clearInstrument, importAbc,
   newPattern, defaultDeck, demoProject, blankProject, normalizeProject, beats, spb, scaleDef, nRows, tonicPc, midiOfRow, rowOfMidi, keyInfo, noteName, rowName,
   chordInfo, barChord, bassEvents, toggleDrum, addDrumHit, addMelodyNote, noteAt, addLayerNote, setBars, remapSteps, clearBar, copyBarNext,
   exportYuE2, exportStandard, exportAbc, scorePackage, checkAbc, encodeM3DS, byId, layerIds,

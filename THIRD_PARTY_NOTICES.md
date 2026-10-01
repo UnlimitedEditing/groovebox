@@ -13,3 +13,10 @@
 - `studio.html` is a copy of the YuE2 Score Studio from
   [ComfyUI-YuE2Fast](https://github.com/UnlimitedEditing/ComfyUI-YuE2Fast) (`docs/index.html`), kept here so the
   hand-off between pages works on one origin.
+- **Nottingham Music Database** (`library/tunes.json`): over a thousand traditional folk tunes collected by Eric Foxley,
+  converted to ABC by the ABC Music project (James Allwright, with Jay Glanville's NMD2ABC and corrections by Seymour
+  Shlien) and distributed freely at abc.sourceforge.net/NMD/; this copy uses the machine-readable cleaning published by
+  Jukedeck (github.com/jukedeck/nottingham-dataset). The tunes themselves are traditional. Tunes in 6/4 and 3/2 are
+  left out because the Groove Box's grid doesn't model those meters.
+- The **full General MIDI sound set** is not shipped: when turned on, the page downloads MuseScore's
+  `FluidR3Mono_GM.sf3` (MIT) directly from the MuseScore repository on GitHub.
