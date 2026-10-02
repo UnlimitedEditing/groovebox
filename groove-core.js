@@ -174,7 +174,9 @@ function normalizeProject(p) {
   p.feel = { ...DEFAULT_FEEL, ...(p.feel || {}) };
   if (!Array.isArray(p.deck) || !p.deck.length) p.deck = defaultDeck();
   p.deck = (p.deck || []).map(i => i.controller === "bubbles" ? { ...i, controller: "grid" } : i);
-  p.deck = p.deck.filter(i => SOUND_BY_ID[i.sound] && CONTROLLERS.some(c => c.id === i.controller)).map(i => ({ octave: 0, color: "#888", ...i, role: i.role === "chords" ? "chords" : SOUND_BY_ID[i.sound].role, arp: i.role === "chords" ? { ...DEFAULT_ARP, ...(i.arp || {}) } : undefined, feel: { ...DEFAULT_INST_FEEL, ...(i.feel || {}) } }));
+  // role: fixed for kits and sweeps; any melodic sound may play as voice, bass, chords or a layer
+  p.deck = p.deck.filter(i => SOUND_BY_ID[i.sound] && CONTROLLERS.some(c => c.id === i.controller)).map(i => { const snd = SOUND_BY_ID[i.sound], role = snd.drumkit ? "drums" : snd.fx ? "fx" : ["voice", "bass", "chords", "layer"].includes(i.role) ? i.role : snd.role; return { octave: 0, color: "#888", ...i, role, arp: role === "chords" ? { ...DEFAULT_ARP, ...(i.arp || {}) } : undefined, feel: { ...DEFAULT_INST_FEEL, ...(i.feel || {}) } }; });
+  for (const i of p.deck) if (!CONTROLLERS.find(c => c.id === i.controller).roles.includes(i.role)) i.controller = CONTROLLERS.find(c => c.roles.includes(i.role)).id;
   if (!p.deck.length) p.deck = defaultDeck();
   p.version = 2;
   return p;

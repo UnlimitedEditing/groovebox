@@ -371,6 +371,7 @@
     <label class="field"><span>Name</span><input id="iName" type="text"></label>
     <label class="field"><span>Sound</span><select id="iSound"></select></label>
     <p class="muted" id="iSoundNote" style="margin:0"></p>
+    <div class="field" id="iRoleField"><span>Plays as</span><div class="row"><span class="seg" id="iRoleSeg"><button data-role="voice">Voice</button><button data-role="bass">Bass</button><button data-role="chords">Chords</button><button data-role="layer">Layer</button></span></div></div>
     <div class="field"><span>Play it with</span><div id="iCtrls" class="list"></div></div>
     <div class="field"><span>Octave</span><div class="row"><span class="seg" id="iOct"><button data-o="-2">−2</button><button data-o="-1">−1</button><button data-o="0">0</button><button data-o="1">+1</button><button data-o="2">+2</button></span></div></div>
     <div class="field"><span>Colour</span><div id="iColors" class="swatches"></div></div>
@@ -984,12 +985,11 @@ $("genDensity").oninput = () => { $("genDensityOut").value = $("genDensity").val
 $("genPrint").onclick = () => runGen(false); $("genAdd").onclick = () => runGen(true); $("genReroll").onclick = () => { genSeed++; runGen(false); };
 
 // instrument sheet
-function soundGroups() {
-  const groups = [];
-  for (const role of ["voice", "drums", "bass", "chords", "layer", "fx"]) {
-    const list = role === "chords" ? G.SOUNDS.filter(s => ["epiano", "guitar", "strings", "pad", "harp", "vibes"].includes(s.id)) : G.SOUNDS.filter(s => s.role === role);
-    groups.push({ label: G.ROLE_LABEL[role], items: list.map(s => ({ value: role === "chords" ? "chords:" + s.id : s.id, name: s.name })) });
-  }
+function soundGroups() {   // every sound, grouped; the role is chosen separately
+  const groups = [
+    { label: "Voices", items: G.SOUNDS.filter(s => s.role === "voice") }, { label: "Drum kits", items: G.SOUNDS.filter(s => s.drumkit) }, { label: "Basses", items: G.SOUNDS.filter(s => s.role === "bass") },
+    { label: "Keys, mallets & strings", items: G.SOUNDS.filter(s => s.role === "layer") }, { label: "Sweeps & hits", items: G.SOUNDS.filter(s => s.fx) },
+  ].map(g => ({ label: g.label, items: g.items.map(s => ({ value: s.id, name: s.name })) }));
   if (P.soundSet === "full") {
     const fams = {}; for (const s of G.GM_SOUNDS) if (s.full) (fams[s.family] = fams[s.family] || []).push({ value: s.id, name: s.name });
     for (const f of Object.keys(fams)) groups.push({ label: "GM · " + f, items: fams[f] });
@@ -1003,29 +1003,31 @@ function openInstSheet(index) {
   $("iName").value = i.name;
   const sel = $("iSound"); sel.innerHTML = "";
   for (const g of soundGroups()) { const grp = document.createElement("optgroup"); grp.label = g.label; for (const it of g.items) { const o = document.createElement("option"); o.value = it.value; o.textContent = it.name; grp.appendChild(o); } sel.appendChild(grp); }
-  const want = i.role === "chords" ? "chords:" + i.sound : i.sound;
-  if (![...sel.options].some(o => o.value === want)) { const o = document.createElement("option"); o.value = want; o.textContent = soundOf(i).name + " (full set)"; sel.appendChild(o); }
-  sel.value = want;
-  $("iSoundNote").textContent = P.soundSet === "full" ? "" : "Turn on the full General MIDI set in Settings for 128 instruments and 8 kits.";
+  if (![...sel.options].some(o => o.value === i.sound)) { const o = document.createElement("option"); o.value = i.sound; o.textContent = soundOf(i).name + " (full set)"; sel.appendChild(o); }
+  sel.value = i.sound;
+  $("iSoundNote").textContent = P.soundSet === "full" ? "" : "Turn on the full General MIDI set in Settings for 128 instruments (the grand piano among them) and 8 kits.";
   $("iRemove").style.display = index >= 0 ? "" : "none"; $("iRemove").textContent = "Remove";
   $("iSave").textContent = index >= 0 ? "Apply" : "Put it on stage";
-  const draft = { ...i };
-  const roleOf = () => sel.value.startsWith("chords:") ? "chords" : G.SOUND_BY_ID[sel.value].role;
+  const draft = { ...i, role: i.role };
+  const fixedRole = () => { const snd = G.SOUND_BY_ID[sel.value]; return snd.drumkit ? "drums" : snd.fx ? "fx" : null; };
+  const roleOf = () => fixedRole() || draft.role || G.SOUND_BY_ID[sel.value].role;
+  const renderRole = () => { const fixed = fixedRole(); $("iRoleField").style.display = fixed ? "none" : ""; $("iRoleSeg").querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.role === roleOf())); };
+  $("iRoleSeg").onclick = e => { const b = e.target.closest("button"); if (!b) return; draft.role = b.dataset.role; renderRole(); renderCtrls(); };
   const renderCtrls = () => {
     const role = roleOf(), list = $("iCtrls"); list.innerHTML = "";
     const ok = G.CONTROLLERS.filter(c => c.roles.includes(role)); if (!ok.some(c => c.id === draft.controller)) draft.controller = ok[0].id;
     for (const c of ok) { const d = document.createElement("div"); d.className = "item"; d.innerHTML = `<div class="grow"><b>${c.name}</b><div class="meta">${c.blurb}</div></div>`; const b = document.createElement("button"); b.textContent = c.id === draft.controller ? "✓ Chosen" : "Use"; b.className = c.id === draft.controller ? "on" : ""; b.onclick = () => { draft.controller = c.id; renderCtrls(); }; d.appendChild(b); list.appendChild(d); }
-    $("iRole").textContent = { voice: "Notes become the sung line of the YuE2 score (one note at a time).", bass: "Notes become the bass line of the YuE2 score.", drums: "Hits go into the drum lanes and shape the bass rhythm.", chords: "Strikes set the chord symbols in the score, at the moment you strike; the arpeggiator shapes how they sound.", layer: "An extra layer you'll hear on stage and get in the standard ABC. YuE2 reads the voice, chords and bass.", fx: "Risers, downlifters and impacts for the arrangement. They're sound only; the score doesn't carry them." }[role];
+    $("iRole").textContent = { voice: "Notes become the sung line of the YuE2 score (one note at a time).", bass: "Notes become the bass line of the YuE2 score.", drums: "Hits go into the drum lanes and shape the bass rhythm.", chords: "Strikes set the chord symbols in the score, at the moment you strike; the arpeggiator shapes how they sound. Any sound can play chords.", layer: "An extra layer you'll hear on stage and get in the standard ABC. YuE2 reads the voice, chords and bass.", fx: "Risers, downlifters and impacts for the arrangement. They're sound only; the score doesn't carry them." }[role];
     $("iOct").style.visibility = role === "drums" || role === "fx" ? "hidden" : "visible";
   };
-  sel.onchange = () => { if (!$("iName").value || $("iName").value === draft.autoName) { const s = G.SOUND_BY_ID[sel.value.replace("chords:", "")]; $("iName").value = draft.autoName = roleOf() === "chords" ? "Chords" : s.name.split(" (")[0]; } renderCtrls(); };
+  sel.onchange = () => { const snd = G.SOUND_BY_ID[sel.value]; if (!fixedRole() && !["voice", "bass", "chords", "layer"].includes(draft.role)) draft.role = snd.role; if (!$("iName").value || $("iName").value === draft.autoName) { $("iName").value = draft.autoName = roleOf() === "chords" ? snd.name.split(" (")[0] + " chords" : snd.name.split(" (")[0]; } renderRole(); renderCtrls(); };
   if (!i.name) sel.onchange();
-  renderCtrls();
+  renderRole(); renderCtrls();
   const octs = $("iOct"); octs.querySelectorAll("button").forEach(b => { b.classList.toggle("on", +b.dataset.o === (draft.octave || 0)); b.onclick = () => { draft.octave = +b.dataset.o; octs.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); }; });
   const sw = $("iColors"); sw.innerHTML = ""; COLORS.forEach(c => { const b = document.createElement("button"); b.className = "swatch" + (c === draft.color ? " on" : ""); b.style.background = c; b.setAttribute("aria-label", "Colour"); b.onclick = () => { draft.color = c; sw.querySelectorAll(".swatch").forEach(x => x.classList.toggle("on", x === b)); }; sw.appendChild(b); });
   $("iSave").onclick = () => {
-    const role = roleOf(), sound = sel.value.replace("chords:", "");
-    const next = { id: index >= 0 ? i.id : G.uid(), name: $("iName").value.trim() || G.SOUND_BY_ID[sound].name, sound, role, controller: draft.controller, octave: draft.octave || 0, color: draft.color, kbOct: i.kbOct || 0, arp: i.arp, hold: i.hold, chordView: i.chordView, feel: i.feel };
+    const role = roleOf(), sound = sel.value;
+    const next = { id: index >= 0 ? i.id : G.uid(), name: $("iName").value.trim() || G.SOUND_BY_ID[sound].name, sound, role, controller: draft.controller, octave: draft.octave || 0, color: draft.color, kbOct: i.kbOct || 0, arp: role === "chords" ? (i.arp || { ...G.DEFAULT_ARP }) : undefined, hold: i.hold, chordView: i.chordView, feel: i.feel };
     if (index >= 0) P.deck[index] = next; else { P.deck.push(next); curInst = P.deck.length - 1; }
     syncSynthDeck(); changed(); renderAll(); closeSheets();
   };
