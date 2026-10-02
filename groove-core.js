@@ -280,6 +280,13 @@ function arpNotes(P, inst, hit) {   // -> [{step, len, midi}] (absolute steps) f
   return out;
 }
 function chordLayer(P, p, inst) { const out = []; for (const h of (p.chordHits || [])) out.push(...arpNotes(P, inst, h)); return out.sort((a, b) => a.step - b.step || a.midi - b.midi); }
+// The arpeggiated notes that start exactly at step `abs`, from every strike sounding there (a strike may have begun bars ago).
+function chordEventsAt(P, p, inst, abs) {
+  const out = [];
+  for (const h of (p.chordHits || [])) { if (h.step > abs || abs >= h.step + h.len) continue; for (const x of arpNotes(P, inst, h)) if (x.step === abs) out.push({ ...x, hit: h }); }
+  return out;
+}
+function chordSoundingAt(p, abs) { return (p.chordHits || []).some(h => h.step <= abs && abs < h.step + h.len); }
 // Bass for a bar: what the player recorded on a bass instrument, else root on kicks and fifth on snares over the bar's chord.
 function bassEvents(P, p, bar) {
   const n = spb(P), base = bar * n;
@@ -685,9 +692,9 @@ function Sequencer(opts) {   // opts: project(), currentPattern(), synth(), onSt
       for (const id of Object.keys(p.layers)) { if (id === "bass") continue; const li = byIdI(id); for (const x of p.layers[id]) if (x.step === abs) { const w = when(li, x.off); sy.note(sy.channelFor(id), x.midi, w.t, x.len * sd * 0.95, 0.85 * w.vel); } }
       if (o.hearBass !== false) { const bi = byRole("bass"); for (const e of bassEvents(Pj, p, entry.bar)) if (e.step === sIn) { const w = when(bi, e.off); sy.note(sy.channelFor("bass"), e.midi, w.t, e.len * sd * 0.9, 0.95 * w.vel); } }
       if (o.hearChords !== false) {
-        const chordInst = byRole("chords"), hits = hitsInBar(Pj, p, entry.bar);
-        if (hits.length) { for (const h of hits) for (const x of arpNotes(Pj, chordInst, h)) if (x.step === abs) { const w = when(chordInst, x.step === h.step ? h.off : 0); sy.note(sy.channelFor("chords"), x.midi, w.t + (x.strum || 0) * 0.025, x.len * sd * 0.95, 0.7 * w.vel); } }
-        else if (sIn === 0) { const c = barChord(Pj, p, entry.bar); if (c) { const w = when(chordInst, 0); sy.chord(sy.channelFor("chords"), c.voicing, w.t, n * sd * 0.98, 0.55 * w.vel); } }
+        const chordInst = byRole("chords");
+        for (const x of chordEventsAt(Pj, p, chordInst, abs)) { const w = when(chordInst, x.step === x.hit.step ? x.hit.off : 0); sy.note(sy.channelFor("chords"), x.midi, w.t + (x.strum || 0) * 0.025, x.len * sd * 0.95, 0.7 * w.vel); }
+        if (sIn === 0 && !chordSoundingAt(p, abs) && !hitsInBar(Pj, p, entry.bar).length) { const c = barChord(Pj, p, entry.bar); if (c) { const w = when(chordInst, 0); sy.chord(sy.channelFor("chords"), c.voicing, w.t, n * sd * 0.98, 0.55 * w.vel); } }
       }
       if (opts.onStep) { const delay = Math.max(0, (S.nextTime - now()) * 1000); S.uiTimers.push(setTimeout(() => { S.uiTimers.shift(); opts.onStep(sIn, entry, p); }, delay)); }
       S.nextTime += sd; S.pos = (S.pos + 1) % S.total;
@@ -869,7 +876,7 @@ function importAbc(P, text) {
 }
 
 window.Groove = { uid, clone, clamp, KEYS, SCALES, DRUMS, DRUM_BY_ID, SECTION_TYPES, METERS, SOUNDS, GM_SOUNDS, GM_FAMILIES, SOUND_BY_ID, STAGE_STANDIN, FULL_SOUNDFONT_URL, CONTROLLERS, ROLE_LABEL, SOLFEGE,
-  meterParts, instEvents, density, clearInstrument, importAbc, hitsInBar, addChordHit, arpNotes, chordLayer, DEFAULT_ARP, ARP_MODES, ARP_RHYTHMS,
+  meterParts, instEvents, density, clearInstrument, importAbc, hitsInBar, addChordHit, arpNotes, chordLayer, chordEventsAt, chordSoundingAt, DEFAULT_ARP, ARP_MODES, ARP_RHYTHMS,
   DRUM_STYLES, drumStylesFor, generateDrums, BASS_STYLES, generateBass, mulberry, GROOVES, DEFAULT_FEEL, DEFAULT_INST_FEEL, feelOf, feelEvent, snapInstrument,
   newPattern, defaultDeck, demoProject, blankProject, normalizeProject, beats, spb, scaleDef, nRows, tonicPc, midiOfRow, rowOfMidi, keyInfo, noteName, rowName,
   chordInfo, barChord, bassEvents, toggleDrum, addDrumHit, addMelodyNote, noteAt, addLayerNote, setBars, remapSteps, clearBar, copyBarNext,
