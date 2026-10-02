@@ -56,6 +56,15 @@ snap to the nearest scale note.
   two-bar and four-bar rises land on the next downbeat, or hold a pad to sweep as long as you press. They're sound
   only; the score doesn't carry them.
 
+## Feel: quantise, swing, groove, humanise
+
+Feel is layered. Settings holds the **song feel**: swing, a groove template (straight, Dilla drag, amapiano shuffle,
+afro push, laid back, pushing, half-time drag) with an amount, and humanise amounts for timing and velocity. Every
+instrument follows it until you open its **Feel** sheet (⋯ → Feel on phones) and untick "follow": then it carries its
+own swing, groove, amount and humanising, independently of the rest. Each instrument also has a **quantise** for what
+you record: 16ths, 8ths, quarters, or Free, which lands on the 16th grid but keeps the micro-timing of your taps for
+playback; "Snap" re-quantises what's already there. Feel is playback only: the score stays on the grid.
+
 ## Instruments
 
 A deck entry is **sound × controller × role**. Assemble your own with "+ Add".

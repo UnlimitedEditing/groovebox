@@ -171,9 +171,10 @@ function normalizeProject(p) {
   p.grid = p.grid === 8 ? 8 : 16; p.meter = METERS.includes(p.meter) ? p.meter : "4/4";
   p.style = p.style || ""; p.lyrics = p.lyrics || ""; p.soundSet = p.soundSet === "full" ? "full" : "stage";
   p.bpm = clamp(+p.bpm || 100, 60, 180); p.swing = clamp(+p.swing || 0, 0, 60); p.octave = clamp(+p.octave || 0, -1, 1);
+  p.feel = { ...DEFAULT_FEEL, ...(p.feel || {}) };
   if (!Array.isArray(p.deck) || !p.deck.length) p.deck = defaultDeck();
   p.deck = (p.deck || []).map(i => i.controller === "bubbles" ? { ...i, controller: "grid" } : i);
-  p.deck = p.deck.filter(i => SOUND_BY_ID[i.sound] && CONTROLLERS.some(c => c.id === i.controller)).map(i => ({ octave: 0, color: "#888", ...i, role: i.role === "chords" ? "chords" : SOUND_BY_ID[i.sound].role, arp: i.role === "chords" ? { ...DEFAULT_ARP, ...(i.arp || {}) } : undefined }));
+  p.deck = p.deck.filter(i => SOUND_BY_ID[i.sound] && CONTROLLERS.some(c => c.id === i.controller)).map(i => ({ octave: 0, color: "#888", ...i, role: i.role === "chords" ? "chords" : SOUND_BY_ID[i.sound].role, arp: i.role === "chords" ? { ...DEFAULT_ARP, ...(i.arp || {}) } : undefined, feel: { ...DEFAULT_INST_FEEL, ...(i.feel || {}) } }));
   if (!p.deck.length) p.deck = defaultDeck();
   p.version = 2;
   return p;
@@ -244,10 +245,10 @@ function barChord(P, p, bar) {
   return chordInfo(P, p.chords[bar] != null ? p.chords[bar] : -1);
 }
 function hitsInBar(P, p, bar) { const n = spb(P); return (p.chordHits || []).filter(h => h.step >= bar * n && h.step < (bar + 1) * n).sort((a, b) => a.step - b.step); }
-function addChordHit(P, p, abs, degree, len) {   // one chord at a time; a strike may hold across bar lines, up to the end of the loop
+function addChordHit(P, p, abs, degree, len, off) {   // one chord at a time; a strike may hold across bar lines, up to the end of the loop
   const n = spb(P), end = Math.min(abs + len, p.bars * n);
   p.chordHits = (p.chordHits || []).filter(h => !(h.step < end && h.step + h.len > abs));
-  if (degree >= 0) p.chordHits.push({ step: abs, len: end - abs, degree }); p.chordHits.sort((a, b) => a.step - b.step);
+  if (degree >= 0) p.chordHits.push({ step: abs, len: end - abs, degree, off: off || 0 }); p.chordHits.sort((a, b) => a.step - b.step);
 }
 // Arpeggiator: how a chords instrument plays a strike. rhythm = 16 chars per bar on the 16th grid ("x" = onset), relative to the strike.
 const DEFAULT_ARP = { mode: "block", rhythm: "x---------------", octaves: 1, gate: 0.9 };
@@ -283,7 +284,7 @@ function bassEvents(P, p, bar) {
   const played = (p.layers && p.layers.bass || []).filter(x => x.step >= base && x.step < base + n).sort((a, b) => a.step - b.step);
   if (played.length) {
     const out = []; let cursor = 0;
-    for (const x of played) { const s = x.step - base; if (s < cursor) continue; out.push({ step: s, midi: x.midi, len: Math.min(x.len, n - s) }); cursor = s + out[out.length - 1].len; }
+    for (const x of played) { const s = x.step - base; if (s < cursor) continue; out.push({ step: s, midi: x.midi, len: Math.min(x.len, n - s), off: x.off || 0 }); cursor = s + out[out.length - 1].len; }
     return out;
   }
   const ch = barChord(P, p, bar) || chordInfo(P, 0);
@@ -359,6 +360,45 @@ function generateBass(P, p, styleId, opts) {   // -> [{step, len, midi}] for lay
   return out;
 }
 
+// ---------- feel: swing, groove templates, humanising, quantise (playback only; the score stays on the grid) ----------
+// Groove templates: per 16th position in a bar, a timing offset (fraction of a 16th; + is late) and an accent (0..1).
+const GROOVES = {
+  straight: { name: "Straight", off: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], acc: [1, .6, .75, .6, .9, .6, .75, .6, .95, .6, .75, .6, .9, .6, .75, .65] },
+  dilla:    { name: "Dilla drag", off: [0, .22, -.1, .3, .05, .2, -.06, .28, 0, .24, -.08, .3, .06, .2, -.05, .26], acc: [1, .5, .8, .55, .9, .5, .7, .6, .95, .5, .8, .55, .9, .5, .75, .7] },
+  amapiano: { name: "Amapiano shuffle", off: [0, -.05, .12, .22, 0, -.05, .12, .22, 0, -.05, .12, .22, 0, -.05, .12, .22], acc: [1, .55, .7, .8, .85, .55, .7, .8, .95, .55, .7, .8, .85, .55, .7, .85] },
+  afro:     { name: "Afro push", off: [0, .05, -.1, .1, 0, .05, -.1, .1, 0, .05, -.1, .1, 0, .05, -.1, .1], acc: [1, .6, .85, .6, .8, .6, .9, .6, .95, .6, .85, .6, .8, .6, .9, .7] },
+  laidback: { name: "Laid back", off: [0, .15, .15, .15, .12, .15, .15, .15, .08, .15, .15, .15, .12, .15, .15, .15], acc: [1, .55, .7, .55, .85, .55, .7, .55, .9, .55, .7, .55, .85, .55, .7, .6] },
+  push:     { name: "Pushing", off: [0, -.12, -.12, -.12, -.1, -.12, -.12, -.12, -.08, -.12, -.12, -.12, -.1, -.12, -.12, -.12], acc: [1, .65, .8, .65, .9, .65, .8, .65, .95, .65, .8, .65, .9, .65, .8, .7] },
+  halftime: { name: "Half-time drag", off: [0, .05, .05, .05, .05, .05, .05, .05, .1, .18, .18, .18, .18, .18, .18, .2], acc: [1, .5, .7, .5, .8, .5, .7, .5, .95, .5, .7, .5, .8, .5, .7, .6] },
+};
+const DEFAULT_FEEL = { groove: "straight", amount: 100, humanTime: 0, humanVel: 0 };            // song-wide
+const DEFAULT_INST_FEEL = { follow: true, quantize: 1, swing: null, groove: null, amount: null, humanTime: null, humanVel: null };   // per instrument; null = follow the song
+function feelOf(P, inst) {   // the effective feel for an instrument
+  const song = { swing: P.swing, ...DEFAULT_FEEL, ...(P.feel || {}) }, f = { ...DEFAULT_INST_FEEL, ...((inst && inst.feel) || {}) };
+  if (f.follow) return { ...song, quantize: f.quantize };
+  return { quantize: f.quantize, swing: f.swing == null ? song.swing : f.swing, groove: f.groove || song.groove, amount: f.amount == null ? song.amount : f.amount, humanTime: f.humanTime == null ? song.humanTime : f.humanTime, humanVel: f.humanVel == null ? song.humanVel : f.humanVel };
+}
+// Timing offset (seconds) and velocity multiplier for an event at step `sIn` of the bar, with optional recorded micro-offset `off` (fraction of a step).
+function feelEvent(P, feel, sIn, sd, off) {
+  const per16 = P.grid / 16, pos16 = Math.floor(sIn / per16) % 16, g = GROOVES[feel.groove] || GROOVES.straight, amt = (feel.amount == null ? 100 : feel.amount) / 100;
+  let t = (off || 0) * sd;
+  if (sIn % 2 === 1) t += (feel.swing || 0) / 100 * sd * 0.5;                        // swing: every second step late
+  if (sIn % per16 === 0) t += g.off[pos16] * amt * (sd * per16);                     // groove micro-timing (in 16ths)
+  let vel = 1 - (1 - g.acc[pos16]) * amt * 0.6;                                      // groove accents, softened
+  if (feel.humanTime) t += (Math.random() - 0.5) * 2 * (feel.humanTime / 100) * sd * 0.3;
+  if (feel.humanVel) vel *= 1 - (Math.random() * (feel.humanVel / 100) * 0.4);
+  return { dt: t, vel: Math.max(0.15, Math.min(1.1, vel)) };
+}
+function snapInstrument(P, p, inst, q) {   // re-quantise an instrument's content to q steps and drop micro-offsets
+  const n = spb(P), snap = s => { const b = Math.floor(s / n), r = Math.round((s - b * n) / q) * q; return b * n + Math.min(r, n - 1); };
+  switch (inst.role) {
+    case "drums": for (const d of DRUMS) p.drums[d.id] = [...new Set(p.drums[d.id].map(snap))].sort((a, b) => a - b); break;
+    case "voice": { const seen = new Set(); p.melody = p.melody.map(x => ({ ...x, step: snap(x.step), off: 0 })).filter(x => { if (seen.has(x.step)) return false; seen.add(x.step); return true; }); break; }
+    case "chords": p.chordHits = (p.chordHits || []).map(x => ({ ...x, step: snap(x.step), off: 0 })); break;
+    default: { const k = inst.role === "bass" ? "bass" : inst.id; if (p.layers[k]) p.layers[k] = p.layers[k].map(x => ({ ...x, step: snap(x.step), off: 0 })); }
+  }
+}
+
 // ---------- editing ----------
 function toggleDrum(p, lane, abs, force) {
   const arr = p.drums[lane], i = arr.indexOf(abs), on = force === undefined ? i < 0 : force;
@@ -366,18 +406,18 @@ function toggleDrum(p, lane, abs, force) {
   arr.sort((a, b) => a - b); return on;
 }
 function addDrumHit(p, lane, abs) { if (!p.drums[lane].includes(abs)) { p.drums[lane].push(abs); p.drums[lane].sort((a, b) => a - b); return true; } return false; }
-function addMelodyNote(P, p, abs, row, len) {   // monophonic: replaces anything it overlaps
+function addMelodyNote(P, p, abs, row, len, off) {   // monophonic: replaces anything it overlaps
   const n = spb(P), end = Math.min(abs + len, (Math.floor(abs / n) + 1) * n);
   p.melody = p.melody.filter(x => !(x.step < end && x.step + x.len > abs));
-  p.melody.push({ step: abs, row, len: end - abs }); p.melody.sort((a, b) => a.step - b.step);
+  p.melody.push({ step: abs, row, len: end - abs, off: off || 0 }); p.melody.sort((a, b) => a.step - b.step);
 }
 function noteAt(p, abs) { return p.melody.find(x => x.step <= abs && abs < x.step + x.len); }
-function addLayerNote(P, p, layer, abs, midi, len, mono) {
+function addLayerNote(P, p, layer, abs, midi, len, mono, off) {
   const n = spb(P), end = Math.min(abs + len, (Math.floor(abs / n) + 1) * n);
   const arr = p.layers[layer] = p.layers[layer] || [];
   if (mono) p.layers[layer] = p.layers[layer].filter(x => !(x.step < end && x.step + x.len > abs));
   else p.layers[layer] = p.layers[layer].filter(x => !(x.step === abs && x.midi === midi));
-  p.layers[layer].push({ step: abs, midi, len: end - abs }); p.layers[layer].sort((a, b) => a.step - b.step || a.midi - b.midi);
+  p.layers[layer].push({ step: abs, midi, len: end - abs, off: off || 0 }); p.layers[layer].sort((a, b) => a.step - b.step || a.midi - b.midi);
   return arr;
 }
 function setBars(P, p, bars) {
@@ -636,26 +676,29 @@ function Sequencer(opts) {   // opts: project(), currentPattern(), synth(), onSt
     const Pj = P(), ahead = now() + 0.16, sd = stepDur(), n = spb(Pj), o = opts.options ? opts.options() : {};
     while (S.nextTime < ahead) {
       const pos = S.pos, entry = S.seq[Math.floor(pos / n)], sIn = pos % n, p = byId(Pj, entry.pid), abs = entry.bar * n + sIn;
-      let t = S.nextTime; if (sIn % 2 === 1) t += Pj.swing / 100 * sd * 0.5;
-      const sy = synth();
-      for (const d of DRUMS) if (p.drums[d.id].includes(abs)) sy.drum(d.gm, t, 1);
-      for (const note of p.melody) if (note.step === abs) sy.note(sy.channelFor("voice"), midiOfRow(Pj, note.row), t, note.len * sd * 0.95, 0.9);
-      for (const id of Object.keys(p.layers)) { if (id === "bass") continue; for (const x of p.layers[id]) if (x.step === abs) sy.note(sy.channelFor(id), x.midi, t, x.len * sd * 0.95, 0.85); }
-      if (o.hearBass !== false) for (const e of bassEvents(Pj, p, entry.bar)) if (e.step === sIn) sy.note(sy.channelFor("bass"), e.midi, t, e.len * sd * 0.9, 0.95);
+      const t0 = S.nextTime, sy = synth(), byRole = role => Pj.deck.find(i => i.role === role) || null, byIdI = id => Pj.deck.find(i => i.id === id) || null;
+      const when = (inst, off) => { const f = feelEvent(Pj, feelOf(Pj, inst), sIn, sd, off); return { t: t0 + f.dt, vel: f.vel }; };
+      { const di = byRole("drums"); for (const d of DRUMS) if (p.drums[d.id].includes(abs)) { const w = when(di, 0); sy.drum(d.gm, w.t, w.vel); } }
+      { const vi = byRole("voice"); for (const note of p.melody) if (note.step === abs) { const w = when(vi, note.off); sy.note(sy.channelFor("voice"), midiOfRow(Pj, note.row), w.t, note.len * sd * 0.95, 0.9 * w.vel); } }
+      for (const id of Object.keys(p.layers)) { if (id === "bass") continue; const li = byIdI(id); for (const x of p.layers[id]) if (x.step === abs) { const w = when(li, x.off); sy.note(sy.channelFor(id), x.midi, w.t, x.len * sd * 0.95, 0.85 * w.vel); } }
+      if (o.hearBass !== false) { const bi = byRole("bass"); for (const e of bassEvents(Pj, p, entry.bar)) if (e.step === sIn) { const w = when(bi, e.off); sy.note(sy.channelFor("bass"), e.midi, w.t, e.len * sd * 0.9, 0.95 * w.vel); } }
       if (o.hearChords !== false) {
-        const chordInst = Pj.deck.find(i => i.role === "chords") || null, hits = hitsInBar(Pj, p, entry.bar);
-        if (hits.length) { for (const h of hits) for (const x of arpNotes(Pj, chordInst, h)) if (x.step === abs) sy.note(sy.channelFor("chords"), x.midi, t + (x.strum || 0) * 0.025, x.len * sd * 0.95, 0.7); }
-        else if (sIn === 0) { const c = barChord(Pj, p, entry.bar); if (c) sy.chord(sy.channelFor("chords"), c.voicing, t, n * sd * 0.98, 0.55); }
+        const chordInst = byRole("chords"), hits = hitsInBar(Pj, p, entry.bar);
+        if (hits.length) { for (const h of hits) for (const x of arpNotes(Pj, chordInst, h)) if (x.step === abs) { const w = when(chordInst, x.step === h.step ? h.off : 0); sy.note(sy.channelFor("chords"), x.midi, w.t + (x.strum || 0) * 0.025, x.len * sd * 0.95, 0.7 * w.vel); } }
+        else if (sIn === 0) { const c = barChord(Pj, p, entry.bar); if (c) { const w = when(chordInst, 0); sy.chord(sy.channelFor("chords"), c.voicing, w.t, n * sd * 0.98, 0.55 * w.vel); } }
       }
       if (opts.onStep) { const delay = Math.max(0, (S.nextTime - now()) * 1000); S.uiTimers.push(setTimeout(() => { S.uiTimers.shift(); opts.onStep(sIn, entry, p); }, delay)); }
       S.nextTime += sd; S.pos = (S.pos + 1) % S.total;
       if (S.pos === 0) { S.anchorTime = S.nextTime; const seq = buildSeq(); S.seq = seq; S.total = seq.length * n; }
     }
   }
-  function quantizedHit() {   // where "now" lands in the playing sequence -> {p, abs, sIn, entry}
-    const n = spb(P()), sd = stepDur();
-    let pos = Math.round((now() - S.anchorTime) / sd); pos = ((pos % S.total) + S.total) % S.total;
-    const entry = S.seq[Math.floor(pos / n)]; return { p: byId(P(), entry.pid), abs: entry.bar * n + pos % n, sIn: pos % n, entry };
+  function quantizedHit(q) {   // where "now" lands in the playing sequence -> {p, abs, sIn, entry, off}; q = steps to snap to (0 = keep the micro-offset)
+    const n = spb(P()), sd = stepDur(), exact = (now() - S.anchorTime) / sd;
+    let pos = Math.round(exact), off = 0;
+    if (q && q > 1) { const bar = Math.floor(pos / n), r = Math.round((pos - bar * n) / q) * q; pos = bar * n + Math.min(r, n - 1); }
+    else if (q === 0) off = Math.max(-0.5, Math.min(0.5, exact - Math.round(exact)));
+    pos = ((pos % S.total) + S.total) % S.total;
+    const entry = S.seq[Math.floor(pos / n)]; return { p: byId(P(), entry.pid), abs: entry.bar * n + pos % n, sIn: pos % n, entry, off };
   }
   function stepsHeld(seconds) { return Math.max(1, Math.round(seconds / stepDur())); }
   function retime() { if (S.playing) S.anchorTime = S.nextTime - S.pos * stepDur(); }
@@ -825,7 +868,7 @@ function importAbc(P, text) {
 
 window.Groove = { uid, clone, clamp, KEYS, SCALES, DRUMS, DRUM_BY_ID, SECTION_TYPES, METERS, SOUNDS, GM_SOUNDS, GM_FAMILIES, SOUND_BY_ID, STAGE_STANDIN, FULL_SOUNDFONT_URL, CONTROLLERS, ROLE_LABEL, SOLFEGE,
   meterParts, instEvents, density, clearInstrument, importAbc, hitsInBar, addChordHit, arpNotes, chordLayer, DEFAULT_ARP, ARP_MODES, ARP_RHYTHMS,
-  DRUM_STYLES, drumStylesFor, generateDrums, BASS_STYLES, generateBass, mulberry,
+  DRUM_STYLES, drumStylesFor, generateDrums, BASS_STYLES, generateBass, mulberry, GROOVES, DEFAULT_FEEL, DEFAULT_INST_FEEL, feelOf, feelEvent, snapInstrument,
   newPattern, defaultDeck, demoProject, blankProject, normalizeProject, beats, spb, scaleDef, nRows, tonicPc, midiOfRow, rowOfMidi, keyInfo, noteName, rowName,
   chordInfo, barChord, bassEvents, toggleDrum, addDrumHit, addMelodyNote, noteAt, addLayerNote, setBars, remapSteps, clearBar, copyBarNext,
   exportYuE2, exportStandard, exportAbc, scorePackage, checkAbc, encodeM3DS, byId, layerIds,
