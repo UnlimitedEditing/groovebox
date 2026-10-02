@@ -9,14 +9,18 @@ const FLUID_JS = "libfluidsynth-2.3.0-with-libsndfile.js", SYNTH_JS = "js-synthe
 const FULL_URL = () => (window.Groove && window.Groove.FULL_SOUNDFONT_URL) || "https://raw.githubusercontent.com/musescore/MuseScore/v3.6.2/share/sound/FluidR3Mono_GM.sf3";
 const E = { ac: null, master: null, noise: null, fluid: null, fluidNode: null, sfont: null, status: "idle", engine: "osc", error: "", volume: 0.8,
             channels: new Map(), programs: new Map(), nextChannel: 0, timers: new Set(), live: new Map(), deck: [], drumProgram: 0,
-            set: "stage", wantSet: "stage", stageBuf: null, fullBuf: null, progress: null };
+            set: "stage", wantSet: "stage", stageBuf: null, fullBuf: null, progress: null, ready: false, attaching: null, useWorklet: true };
+const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
 const now = () => E.ac ? E.ac.currentTime : 0;
 const stageHas = program => { const G = window.Groove; return !G || G.SOUNDS.some(s => !s.drumkit && s.program === program); };
 const standIn = program => { const G = window.Groove; return G && G.STAGE_STANDIN[program] != null ? G.STAGE_STANDIN[program] : 4; };
 
+// The AudioContext is created inside the first real user gesture (iOS needs that), and FluidSynth attaches to it then.
+function unlock() { try { const b = E.ac.createBuffer(1, 1, E.ac.sampleRate), src = E.ac.createBufferSource(); src.buffer = b; src.connect(E.ac.destination); src.start(0); } catch (e) { /* ignore */ } }
 function ensure() {
   if (!E.ac) {
     const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return false;
+    try { if (navigator.audioSession) navigator.audioSession.type = "playback"; } catch (e) { /* older iOS */ }   // play even with the ring/silent switch on
     E.ac = new AC({ latencyHint: "interactive" });
     E.master = E.ac.createGain(); E.master.gain.value = E.volume * 0.9;
     const comp = E.ac.createDynamicsCompressor(); comp.threshold.value = -10; comp.ratio.value = 3;
@@ -24,10 +28,15 @@ function ensure() {
     const buf = E.ac.createBuffer(1, E.ac.sampleRate * 2, E.ac.sampleRate), d = buf.getChannelData(0);
     for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
     E.noise = buf;
+    unlock();
+    if (E.ready && !E.fluid && !E.attaching) attach();
   }
-  if (E.ac.state === "suspended") E.ac.resume();
+  if (E.ac.state !== "running") { E.ac.resume().catch(() => {}); unlock(); }
   return true;
 }
+// Every kind of gesture unlocks sound: iOS counts touchend/click, not touchstart.
+for (const ev of ["pointerdown", "touchend", "mousedown", "keydown"]) document.addEventListener(ev, () => { if (E.ac || E.ready) ensure(); }, { capture: true, passive: true });
+document.addEventListener("visibilitychange", () => { if (!document.hidden && E.ac && E.ac.state !== "running") E.ac.resume().catch(() => {}); });
 function loadScript(src) { return new Promise((res, rej) => { const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = () => rej(new Error("couldn't load " + src.split("/").pop())); document.head.appendChild(s); }); }
 async function fetchWithProgress(url, onFrac) {
   const ctl = new AbortController(), timer = setTimeout(() => ctl.abort(), 180000);   // 3 minutes for 24 MB, then give up with a clear message
@@ -44,13 +53,14 @@ async function fetchWithProgress(url, onFrac) {
 let progressCb = null;
 const progress = (msg, frac) => { E.progress = { msg, frac }; if (progressCb) progressCb(msg, frac); };
 
-// Load FluidSynth + the stage SoundFont. Safe to call more than once; resolves to the engine name.
-let loading = null;
+// Load FluidSynth + the stage SoundFont (no audio context needed), then attach to the context once a gesture made one.
+// Safe to call more than once; resolves to the engine name once attached (or "osc" if FluidSynth can't be used).
+let loading = null, attachedResolve = null;
 function load(onProgress) {
   if (onProgress) progressCb = onProgress;
   if (loading) return loading;
   loading = (async () => {
-    if (!ensure()) throw new Error("no Web Audio");
+    if (!(window.AudioContext || window.webkitAudioContext)) throw new Error("no Web Audio");
     E.status = "loading";
     progress("Loading synthesizer…", 0.05);
     await loadScript(VENDOR + FLUID_JS); await loadScript(VENDOR + SYNTH_JS);
@@ -58,24 +68,56 @@ function load(onProgress) {
     progress("Loading instruments…", 0.3);
     const resp = await fetch(VENDOR + SF); if (!resp.ok) throw new Error("SoundFont missing (" + resp.status + ")");
     E.stageBuf = await resp.arrayBuffer();
-    progress("Warming up…", 0.7);
-    let synth = null;
-    try {   // AudioWorklet: rendering off the main thread, lowest latency
-      await E.ac.audioWorklet.addModule(VENDOR + FLUID_JS); await E.ac.audioWorklet.addModule(VENDOR + WORKLET_JS);
-      synth = new window.JSSynth.AudioWorkletNodeSynthesizer(); synth.init(E.ac.sampleRate, { polyphony: 96 });
-      E.fluidNode = synth.createAudioNode(E.ac); E.fluidNode.connect(E.master);
-    } catch (e) {   // ScriptProcessor fallback
-      console.warn("AudioWorklet unavailable, using ScriptProcessor:", e.message);
-      synth = new window.JSSynth.Synthesizer(); synth.init(E.ac.sampleRate, { polyphony: 96 });
-      E.fluidNode = synth.createAudioNode(E.ac, 2048); E.fluidNode.connect(E.master);
-    }
-    E.sfont = await synth.loadSFont(E.stageBuf); E.set = "stage";
-    E.fluid = synth; await applyPrograms();
-    E.status = "ready"; E.engine = "fluid"; progress("Ready", 1);
-    if (E.wantSet === "full") loadSet("full");
-    return "fluid";
+    E.ready = true;
+    if (E.ac) return attach();
+    progress("Ready · tap anywhere to start the sound", 0.95);
+    return new Promise(res => { attachedResolve = res; });
   })().catch(err => { console.warn("FluidSynth unavailable:", err); E.status = "fallback"; E.engine = "osc"; E.error = err.message; progress("Using the built-in sketch sounds (" + err.message + ")", 1); return "osc"; });
   return loading;
+}
+// Create the synthesizer on the live AudioContext. Safari/iOS go straight to the main-thread path; everything else
+// tries the AudioWorklet and falls back if the worklet stays silent.
+function attach() {
+  if (E.attaching) return E.attaching;
+  E.attaching = (async () => {
+    progress("Warming up…", 0.97);
+    let synth = null, worklet = false;
+    const build = async (useWorklet) => {
+      if (E.fluidNode) { try { E.fluidNode.disconnect(); } catch (e) { /* ignore */ } }
+      if (useWorklet) {
+        await E.ac.audioWorklet.addModule(VENDOR + FLUID_JS); await E.ac.audioWorklet.addModule(VENDOR + WORKLET_JS);
+        synth = new window.JSSynth.AudioWorkletNodeSynthesizer(); synth.init(E.ac.sampleRate, { polyphony: 96 });
+        E.fluidNode = synth.createAudioNode(E.ac);
+      } else {
+        synth = new window.JSSynth.Synthesizer(); synth.init(E.ac.sampleRate, { polyphony: 96 });
+        E.fluidNode = synth.createAudioNode(E.ac, 2048);
+      }
+      E.fluidNode.connect(E.master);
+      E.sfont = await synth.loadSFont(E.stageBuf); E.set = "stage"; worklet = useWorklet;
+    };
+    try { if (IOS || !E.ac.audioWorklet || !E.useWorklet) throw new Error("main-thread path"); await build(true); }
+    catch (e) { console.warn("Using the main-thread synthesizer:", e.message); await build(false); }
+    E.fluid = synth; await applyPrograms();
+    if (worklet && !(await producesSound())) { console.warn("AudioWorklet stayed silent; switching to the main-thread synthesizer"); E.useWorklet = false; await build(false); E.fluid = synth; await applyPrograms(); }
+    E.status = "ready"; E.engine = "fluid"; progress("Ready", 1);
+    if (E.wantSet === "full") loadSet("full");
+    if (attachedResolve) { attachedResolve("fluid"); attachedResolve = null; }
+    return "fluid";
+  })().catch(err => { console.warn("FluidSynth unavailable:", err); E.status = "fallback"; E.engine = "osc"; E.error = err.message; progress("Using the built-in sketch sounds (" + err.message + ")", 1); if (attachedResolve) { attachedResolve("osc"); attachedResolve = null; } return "osc"; });
+  return E.attaching;
+}
+// Plays a very quiet note into an analyser and reports whether any signal came out within a second.
+function producesSound() {
+  return new Promise(res => {
+    try {
+      if (E.ac.state !== "running") { res(true); return; }   // can't tell while suspended; trust it
+      const an = E.ac.createAnalyser(); an.fftSize = 512; E.fluidNode.connect(an); const data = new Float32Array(an.fftSize);
+      const ch = 15; E.fluid.midiProgramSelect(ch, E.sfont, 0, 4); E.fluid.midiNoteOn(ch, 72, 2);
+      const t0 = performance.now(); const tick = () => { an.getFloatTimeDomainData(data); let peak = 0; for (let i = 0; i < data.length; i++) peak = Math.max(peak, Math.abs(data[i])); if (peak > 1e-7) { done(true); return; } if (performance.now() - t0 > 1200) { done(false); return; } requestAnimationFrame(tick); };
+      const done = ok => { E.fluid.midiNoteOff(ch, 72); try { E.fluidNode.disconnect(an); } catch (e) { /* ignore */ } res(ok); };
+      tick();
+    } catch (e) { res(true); }
+  });
 }
 
 // Switch between the stage set and the full General MIDI set. Resolves to the set actually in use.
@@ -202,5 +244,5 @@ function oscVoice(program, midi, t, vel) {
 }
 
 window.GrooveSynth = { ensure, now, load, loadSet, setDeck, channelFor, note, chord, drum, noteOn, noteOff, allOff, setVolume,
-  get status() { return E.status; }, get engine() { return E.engine; }, get error() { return E.error; }, get progress() { return E.progress; }, get context() { return E.ac; }, get set() { return E.set; } };
+  get status() { return E.status; }, get engine() { return E.engine; }, get error() { return E.error; }, get progress() { return E.progress; }, get context() { return E.ac; }, get set() { return E.set; }, get ios() { return IOS; } };
 })();

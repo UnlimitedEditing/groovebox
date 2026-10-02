@@ -427,6 +427,7 @@ function onStep(sIn, entry, p) {
   drawMini();
 }
 function togglePlay() {
+  SY.ensure();
   if (seq.playing) { seq.stop(); if (recArmed) setRec(false); }
   else if (!seq.start()) { setStatus("This browser has no Web Audio support.", "err"); return; } else liveBar = 0;
   for (const id of ["play", "sidePlay"]) { $(id).textContent = seq.playing ? "■" : "▶"; $(id).setAttribute("aria-label", seq.playing ? "Stop" : "Play"); }
@@ -969,7 +970,7 @@ G.METERS.forEach(m => { const b = document.createElement("button"); b.dataset.me
 const saved = G.loadAutosave();
 loadProject(saved || G.demoProject());
 setStatus(saved ? "Picked up where you left off." : "Tap the keys. Press ▶ for the demo groove, ● to play yourself into it. Tap the song strip to arrange.", "");
-SY.load((msg, frac) => { $("engineText").textContent = msg; $("engineBar").style.width = Math.round(frac * 100) + "%"; }).then(engine => {
+SY.load((msg, frac) => { $("engineText").textContent = msg + (SY.ios && frac >= 0.95 ? " · iPhone: turn the ring/silent switch off if you hear nothing" : ""); $("engineBar").style.width = Math.round(frac * 100) + "%"; }).then(engine => {
   $("engineText").textContent = engine === "fluid" ? (SY.set === "full" ? "FluidSynth · full General MIDI" : "FluidSynth · stage set") : "Sketch sounds (FluidSynth didn't load)";
   setTimeout(() => { if (SY.set === P.soundSet) { $("engineBarWrap").style.display = "none"; $("engineLine").classList.add("done"); } }, 1500);
 });
