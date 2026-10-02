@@ -108,7 +108,7 @@ const CONTROLLERS = [
   { id: "xy",      name: "Slide pad",   blurb: "Glide a finger: left-right is pitch, up is louder.", roles: ["voice", "bass", "layer"] },
   { id: "grid",    name: "Light grid",  blurb: "Tap the beats you want lit; the loop sweeps through them.", roles: ["voice", "bass", "layer", "drums"] },
   { id: "rings",   name: "Rings",       blurb: "Concentric rings, low outside to high inside. Tap or drag.", roles: ["voice", "bass", "layer"] },
-  { id: "chords",  name: "Chord pads",  blurb: "Strike chords in time, or lay them on the roll; the arpeggiator plays them back.", roles: ["chords"] },
+  { id: "chords",  name: "Chord pads",  blurb: "Strike chords in time, or lay them on the roll and drag a tail to hold longer; the arpeggiator plays them back.", roles: ["chords"] },
   { id: "fxpads",  name: "FX pads",     blurb: "Risers, downlifters and impacts, as long as you hold.",  roles: ["fx"] },
 ];
 const ROLE_LABEL_FX = "Sweeps & hits";
@@ -244,8 +244,8 @@ function barChord(P, p, bar) {
   return chordInfo(P, p.chords[bar] != null ? p.chords[bar] : -1);
 }
 function hitsInBar(P, p, bar) { const n = spb(P); return (p.chordHits || []).filter(h => h.step >= bar * n && h.step < (bar + 1) * n).sort((a, b) => a.step - b.step); }
-function addChordHit(P, p, abs, degree, len) {   // one chord at a time
-  const n = spb(P), end = Math.min(abs + len, (Math.floor(abs / n) + 1) * n);
+function addChordHit(P, p, abs, degree, len) {   // one chord at a time; a strike may hold across bar lines, up to the end of the loop
+  const n = spb(P), end = Math.min(abs + len, p.bars * n);
   p.chordHits = (p.chordHits || []).filter(h => !(h.step < end && h.step + h.len > abs));
   if (degree >= 0) p.chordHits.push({ step: abs, len: end - abs, degree }); p.chordHits.sort((a, b) => a.step - b.step);
 }
@@ -391,10 +391,10 @@ function remapSteps(P, oldSpb, newSpb, ratio) {   // keep the groove's shape acr
   for (const p of P.patterns) {
     const map = s => { const b = Math.floor(s / oldSpb), w = Math.round((s % oldSpb) * ratio); return w < newSpb ? b * newSpb + w : -1; };
     for (const d of DRUMS) p.drums[d.id] = [...new Set(p.drums[d.id].map(map).filter(s => s >= 0))].sort((a, b) => a - b);
-    const fix = list => { const out = []; for (const x of list) { const s = map(x.step); if (s < 0) continue; out.push({ ...x, step: s, len: clamp(Math.round(x.len * ratio), 1, newSpb - s % newSpb) }); } return out; };
+    const fix = (list, whole) => { const out = []; for (const x of list) { const s = map(x.step); if (s < 0) continue; out.push({ ...x, step: s, len: clamp(Math.round(x.len * ratio), 1, whole ? p.bars * newSpb - s : newSpb - s % newSpb) }); } return out; };
     const notes = fix(p.melody);
     p.melody = notes.filter((x, i) => !notes.some((y, j) => j < i && y.step < x.step + x.len && y.step + y.len > x.step));
-    p.chordHits = fix(p.chordHits || []);
+    p.chordHits = fix(p.chordHits || [], true);
     for (const k of Object.keys(p.layers)) p.layers[k] = fix(p.layers[k]);
   }
 }
@@ -470,9 +470,11 @@ function vocalBar(P, p, bar, withChords, k) {
   const ev = p.melody.filter(x => x.step >= base && x.step < base + n).sort((a, b) => a.step - b.step).map(x => ({ step: x.step - base, midi: midiOfRow(P, x.row), len: x.len }));
   let symbols = null;
   if (withChords) {
-    const hits = hitsInBar(P, p, bar);
-    if (hits.length) { symbols = {}; for (const h of hits) { const c = chordInfo(P, h.degree); if (c) symbols[h.step - base] = `"${c.symbol}"`; } }
-    else { const ch = barChord(P, p, bar); if (ch) symbols = { 0: `"${ch.symbol}"` }; }
+    const hits = hitsInBar(P, p, bar), sounding = (p.chordHits || []).some(h => h.step < base && h.step + h.len > base);
+    if (hits.length || sounding) {
+      symbols = {}; for (const h of hits) { const c = chordInfo(P, h.degree); if (c) symbols[h.step - base] = `"${c.symbol}"`; }
+      if (!symbols[0]) { const ch = barChord(P, p, bar); if (ch) symbols[0] = `"${ch.symbol}"`; }   // a chord held over the bar line is restated
+    } else { const ch = barChord(P, p, bar); if (ch) symbols = { 0: `"${ch.symbol}"` }; }
   }
   return eventsBar(P, ev, n, k, "", symbols || {});
 }

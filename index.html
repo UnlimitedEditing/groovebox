@@ -133,8 +133,10 @@
   .rcell { border-radius: 6px; background: rgba(255,255,255,.06); min-height: 0; position: relative; }
   .rcell.beat { background: rgba(255,255,255,.12); }
   .rcell.on { background: var(--inst); box-shadow: 0 0 10px color-mix(in srgb, var(--inst) 60%, transparent); }
-  .rcell.on.tail { opacity: .55; border-top-left-radius: 0; border-bottom-left-radius: 0; }
-  .rcell.on.head.cont { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .rcell.on.tail { opacity: .6; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+  .rcell.on.head.cont, .rcell.on.tail.cont { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .rcell.on.end::after { content: ""; position: absolute; right: 3px; top: 25%; bottom: 25%; width: 3px; border-radius: 2px; background: rgba(255,255,255,.75); }
+  .rcell.on.end { cursor: ew-resize; }
   .rcell.now { outline: 2px solid #fff; outline-offset: -2px; }
   .fxpads { position: absolute; inset: 8px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
   .fxpads .pad { font-size: 17px; }
@@ -691,8 +693,9 @@ CTRL.chords = {
           const lab = document.createElement("div"); lab.className = "lab"; lab.textContent = degrees[d].symbol; roll.appendChild(lab);
           for (let c = 0; c < cols; c++) {
             const abs = base + c * res, hit = (p.chordHits || []).find(h => h.step <= abs && abs < h.step + h.len && h.degree === d), cell = document.createElement("div");
-            cell.className = "rcell" + (c % perBeat === 0 ? " beat" : "") + (hit ? " on" + (hit.step === abs ? " head" : " tail") + (hit.step + hit.len > abs + res ? " cont" : "") : "");
-            cell.dataset.col = c; cell._abs = abs; cell._d = d; roll.appendChild(cell);
+            const last = hit && hit.step + hit.len <= abs + res;
+            cell.className = "rcell" + (c % perBeat === 0 ? " beat" : "") + (hit ? " on" + (hit.step === abs ? " head" : " tail") + (last ? " end" : " cont") : "");
+            cell.dataset.col = c; cell._abs = abs; cell._d = d; cell._hit = hit || null; roll.appendChild(cell);
           }
         }
       }
@@ -708,15 +711,36 @@ CTRL.chords = {
         return;
       }
       if (cell) {
-        const p = pat(), hit = (p.chordHits || []).find(h => h.step <= cell._abs && cell._abs < h.step + h.len && h.degree === cell._d);
-        if (hit) p.chordHits = p.chordHits.filter(h => h !== hit); else { G.addChordHit(P, p, cell._abs, cell._d, hold); const info = degrees[cell._d]; SY.chord(SY.channelFor(inst().id), info.voicing.map(m => m + 12 * (i.octave || 0)), SY.now(), 0.5, 0.7); }
-        changed(); render();
+        // tap an empty cell: a strike of the chosen hold; tap a strike: remove it; drag right from any strike cell: stretch the hold
+        const p = pat(); let hit = cell._hit;
+        if (!hit) { G.addChordHit(P, p, cell._abs, cell._d, hold); hit = p.chordHits.find(h => h.step === cell._abs && h.degree === cell._d); const info = degrees[cell._d]; SY.chord(SY.channelFor(inst().id), info.voicing.map(m => m + 12 * (i.octave || 0)), SY.now(), 0.5, 0.7); changed(); render(); drag = { hit, startX: e.clientX, moved: false, fresh: true, edgeTimer: null }; }
+        else drag = { hit, startX: e.clientX, moved: false, fresh: false, edgeTimer: null };
+        try { el.setPointerCapture(e.pointerId); } catch (err) { /* synthetic pointer */ }
       }
     };
+    let drag = null;
+    const total = steps * pat().bars;
+    const stretchTo = abs => { const d = drag; if (!d) return; const end = Math.min(total, Math.max(d.hit.step + res, abs + res)); if (end - d.hit.step !== d.hit.len) { const p = pat(); p.chordHits = p.chordHits.filter(h => h === d.hit || !(h.step < end && h.step + h.len > d.hit.step && h.step > d.hit.step)); d.hit.len = end - d.hit.step; changed(); render(); } };
+    el.onpointermove = e => {
+      if (!drag || mode !== "roll") return;
+      if (Math.abs(e.clientX - drag.startX) > 8) drag.moved = true; if (!drag.moved) return;
+      const rollEl = body.firstChild, r = rollEl.getBoundingClientRect();
+      if (e.clientX > r.right - 6) {   // held at the right edge: roll into the next bar and keep stretching
+        if (!drag.edgeTimer) drag.edgeTimer = setTimeout(() => { drag.edgeTimer = null; if (sel + 1 < pat().bars) { sel++; stretchTo(sel * steps); } }, 350);
+        stretchTo((sel + 1) * steps - res); return;
+      }
+      if (drag.edgeTimer) { clearTimeout(drag.edgeTimer); drag.edgeTimer = null; }
+      const under = document.elementFromPoint(e.clientX, e.clientY)?.closest?.(".rcell"); if (under) stretchTo(under._abs);
+    };
+    const endDrag = e => {
+      if (!drag) return; const d = drag; drag = null; if (d.edgeTimer) clearTimeout(d.edgeTimer);
+      if (!d.moved && !d.fresh) { const p = pat(); p.chordHits = p.chordHits.filter(h => h !== d.hit); changed(); render(); }
+    };
     const up = e => {
+      endDrag(e);
       const h = held.get(e.pointerId); if (!h) return; held.delete(e.pointerId); h.pad.classList.remove("hit");
       for (let j = 0; j < h.voices; j++) SY.noteOff("c" + e.pointerId + "_" + j);
-      if (h.q && h.degree >= 0) { const len = G.clamp(seq.stepsHeld(SY.now() - h.t0), 1, steps - h.q.abs % steps); G.addChordHit(P, h.q.p, h.q.abs, h.degree, len); changed(); if (h.q.p === pat()) renderBars(); }
+      if (h.q && h.degree >= 0) { const len = G.clamp(seq.stepsHeld(SY.now() - h.t0), 1, h.q.p.bars * steps - h.q.abs); G.addChordHit(P, h.q.p, h.q.abs, h.degree, len); changed(); if (h.q.p === pat()) renderBars(); }
     };
     el.onpointerup = el.onpointercancel = up;
     this.onBar = b => { if (mode === "roll" && seq.playing) { sel = b; render(); } else renderBars(); };
