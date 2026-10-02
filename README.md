@@ -37,6 +37,25 @@ follow the tune, and the parts appear in the arrangement view. You can also past
 handles repeats and endings, pickup bars, ties, broken rhythms, tuplets and bracketed chords; notes outside the scale
 snap to the nearest scale note.
 
+## Composing helpers
+
+- **Drum machine prints patterns.** On a drums instrument, Generate (or ⋯ → Generate on phones) opens a sheet of
+  styles that fit the loop's meter: afrobeats, amapiano, highlife, house, hip-hop, trap, dembow, funk, rock, bossa
+  nova, minimal, plus waltz (3/4), jig (6/8) and slip jig (9/8). Density decides how many optional hits land,
+  variation makes the bars differ, a fill can close the loop, and "Another take" re-rolls. Print replaces the loop's
+  drums; Add layers on top.
+- **Chord roll and arpeggiator.** Chords are *strikes* with a start and a hold. Strike the pads live while recording
+  (the hold is how long you press) or lay strikes on the roll (one chord at a time, a hold length per tap). Each chords
+  instrument has an arpeggiator: block, up, down, up-and-down, random or strum; a rhythm chosen from presets written
+  the way you'd say them ("da da … da, da da") or tapped out on a 16-step strip; and a one-, two- or three-octave range.
+  Strikes export as chord symbols at the moment they fall, and the arpeggiated notes become a Chords voice in the
+  standard ABC.
+- **Bassline generator.** On a bass instrument, Generate prints a line that follows each bar's chord: roots on the
+  kicks, pulse, octave bounce, walking, dembow, amapiano log-drum, sustained root, or root and fifth.
+- **Sweeps and hits.** Add a Riser, Downlifter or Impact (synthesised, no SoundFont needed) with the FX pads: one-bar,
+  two-bar and four-bar rises land on the next downbeat, or hold a pad to sweep as long as you press. They're sound
+  only; the score doesn't carry them.
+
 ## Instruments
 
 A deck entry is **sound × controller × role**. Assemble your own with "+ Add".

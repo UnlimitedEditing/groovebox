@@ -64,6 +64,9 @@ const SOUNDS = [
   { id: "agogo",   name: "Agogo bells",      program: 113, role: "layer" },
   { id: "wood",    name: "Woodblock",        program: 115, role: "layer" },
   { id: "taiko",   name: "Taiko",            program: 116, role: "layer" },
+  { id: "riser",   name: "Riser (sweep up)",  program: -1,  role: "fx", fx: true },
+  { id: "fall",    name: "Downlifter",        program: -2,  role: "fx", fx: true },
+  { id: "impact",  name: "Impact",            program: -3,  role: "fx", fx: true },
 ];
 const GM_NAMES = ["Acoustic Grand Piano", "Bright Acoustic Piano", "Electric Grand Piano", "Honky-tonk Piano", "Electric Piano 1", "Electric Piano 2", "Harpsichord", "Clavinet",
   "Celesta", "Glockenspiel", "Music Box", "Vibraphone", "Marimba", "Xylophone", "Tubular Bells", "Dulcimer",
@@ -105,9 +108,11 @@ const CONTROLLERS = [
   { id: "xy",      name: "Slide pad",   blurb: "Glide a finger: left-right is pitch, up is louder.", roles: ["voice", "bass", "layer"] },
   { id: "grid",    name: "Light grid",  blurb: "Tap the beats you want lit; the loop sweeps through them.", roles: ["voice", "bass", "layer", "drums"] },
   { id: "rings",   name: "Rings",       blurb: "Concentric rings, low outside to high inside. Tap or drag.", roles: ["voice", "bass", "layer"] },
-  { id: "chords",  name: "Chord pads",  blurb: "One tap plays a whole chord and sets the bar.",      roles: ["chords"] },
+  { id: "chords",  name: "Chord pads",  blurb: "Strike chords in time, or lay them on the roll; the arpeggiator plays them back.", roles: ["chords"] },
+  { id: "fxpads",  name: "FX pads",     blurb: "Risers, downlifters and impacts, as long as you hold.",  roles: ["fx"] },
 ];
-const ROLE_LABEL = { voice: "Voice (the sung line)", bass: "Bass line", drums: "Drums", chords: "Chords", layer: "Extra layer" };
+const ROLE_LABEL_FX = "Sweeps & hits";
+const ROLE_LABEL = { voice: "Voice (the sung line)", bass: "Bass line", drums: "Drums", chords: "Chords", layer: "Extra layer", fx: "Sweeps & hits" };
 
 // ---------- project model ----------
 // pattern.drums[lane] = absolute step indexes (bar * stepsPerBar + step)
@@ -116,7 +121,7 @@ const ROLE_LABEL = { voice: "Voice (the sung line)", bass: "Bass line", drums: "
 // pattern.chords[bar] = degree 0..6 of the parent scale, or -1
 function newPattern(name, bars) {
   bars = bars || 1;
-  return { id: uid(), name, bars, drums: Object.fromEntries(DRUMS.map(d => [d.id, []])), melody: [], layers: {}, chords: Array(bars).fill(-1) };
+  return { id: uid(), name, bars, drums: Object.fromEntries(DRUMS.map(d => [d.id, []])), melody: [], layers: {}, chords: Array(bars).fill(-1), chordHits: [] };
 }
 function defaultDeck() {
   return [
@@ -158,7 +163,7 @@ function normalizeProject(p) {
   for (const q of p.patterns) {
     q.drums = q.drums || {}; for (const d of DRUMS) q.drums[d.id] = q.drums[d.id] || [];
     q.chords = Array.from({ length: q.bars }, (_, i) => (q.chords && q.chords[i] != null) ? q.chords[i] : -1);
-    q.melody = q.melody || []; q.layers = q.layers || {};
+    q.melody = q.melody || []; q.layers = q.layers || {}; q.chordHits = q.chordHits || [];
   }
   p.song = (p.song || []).filter(s => p.patterns.some(q => q.id === s.pattern));
   if (!p.song.length) p.song = [{ pattern: p.patterns[0].id, repeat: 1, section: "verse" }];
@@ -168,7 +173,7 @@ function normalizeProject(p) {
   p.bpm = clamp(+p.bpm || 100, 60, 180); p.swing = clamp(+p.swing || 0, 0, 60); p.octave = clamp(+p.octave || 0, -1, 1);
   if (!Array.isArray(p.deck) || !p.deck.length) p.deck = defaultDeck();
   p.deck = (p.deck || []).map(i => i.controller === "bubbles" ? { ...i, controller: "grid" } : i);
-  p.deck = p.deck.filter(i => SOUND_BY_ID[i.sound] && CONTROLLERS.some(c => c.id === i.controller)).map(i => ({ octave: 0, color: "#888", ...i, role: i.role === "chords" ? "chords" : SOUND_BY_ID[i.sound].role }));
+  p.deck = p.deck.filter(i => SOUND_BY_ID[i.sound] && CONTROLLERS.some(c => c.id === i.controller)).map(i => ({ octave: 0, color: "#888", ...i, role: i.role === "chords" ? "chords" : SOUND_BY_ID[i.sound].role, arp: i.role === "chords" ? { ...DEFAULT_ARP, ...(i.arp || {}) } : undefined }));
   if (!p.deck.length) p.deck = defaultDeck();
   p.version = 2;
   return p;
@@ -232,7 +237,46 @@ function chordInfo(P, degree) {
   const r = 60 + rootPc - (rootPc > 6 ? 12 : 0);
   return { degree, symbol: rootName + quality, numeral, bassRoot: 36 + rootPc, bassFifth: 36 + ((rootPc + fifth) % 12), voicing: [r, r + third, r + fifth], rootPc };
 }
-function barChord(P, p, bar) { return chordInfo(P, p.chords[bar] != null ? p.chords[bar] : -1); }
+// A bar's chord: the strike sounding at the bar line (or the first strike in the bar) wins over the bar's chord pad.
+function barChord(P, p, bar) {
+  const n = spb(P), hits = (p.chordHits || []).filter(h => h.step < (bar + 1) * n && h.step + h.len > bar * n).sort((a, b) => a.step - b.step);
+  if (hits.length) return chordInfo(P, hits[0].degree);
+  return chordInfo(P, p.chords[bar] != null ? p.chords[bar] : -1);
+}
+function hitsInBar(P, p, bar) { const n = spb(P); return (p.chordHits || []).filter(h => h.step >= bar * n && h.step < (bar + 1) * n).sort((a, b) => a.step - b.step); }
+function addChordHit(P, p, abs, degree, len) {   // one chord at a time
+  const n = spb(P), end = Math.min(abs + len, (Math.floor(abs / n) + 1) * n);
+  p.chordHits = (p.chordHits || []).filter(h => !(h.step < end && h.step + h.len > abs));
+  if (degree >= 0) p.chordHits.push({ step: abs, len: end - abs, degree }); p.chordHits.sort((a, b) => a.step - b.step);
+}
+// Arpeggiator: how a chords instrument plays a strike. rhythm = 16 chars per bar on the 16th grid ("x" = onset), relative to the strike.
+const DEFAULT_ARP = { mode: "block", rhythm: "x---------------", octaves: 1, gate: 0.9 };
+const ARP_MODES = [["block", "Block"], ["up", "Up"], ["down", "Down"], ["updown", "Up & down"], ["random", "Random"], ["strum", "Strum"]];
+const ARP_RHYTHMS = [
+  ["x---------------", "Hold", "daaa"], ["x-x-x-x-x-x-x-x-", "Eighths", "da da da da da da da da"], ["xxxxxxxxxxxxxxxx", "Sixteenths", "dadadadadadadada"],
+  ["x-x-----x---x-x-", "Call & answer", "da da … da, da da"], ["x-x-x---x-x-x-x-", "Three then four", "da da da … da da da da"], ["x--x--x-x--x--x-", "Tresillo", "da . . da . . da . da . . da . . da"],
+  ["x--x-x--x--x-x--", "Amapiano", "da . . da . da . . da . . da . da"], ["--x---x---x---x-", "Offbeats", ". da . da . da . da"], ["x---x---x---x---", "Quarters", "da . da . da . da"],
+  ["x-------x---x---", "Push", "da … da . da"], ["x--x--x---x--x--", "Clave", "da . . da . . da . . . da . . da"],
+];
+function mulberry(seed) { let a = seed >>> 0; return () => { a = (a + 0x6D2B79F5) >>> 0; let t = a; t = Math.imul(t ^ (t >>> 15), t | 1); t ^= t + Math.imul(t ^ (t >>> 7), t | 61); return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+function arpNotes(P, inst, hit) {   // -> [{step, len, midi}] (absolute steps) for one strike
+  const c = chordInfo(P, hit.degree); if (!c) return [];
+  const arp = { ...DEFAULT_ARP, ...((inst && inst.arp) || {}) }, grid = P.grid, per16 = grid / 16;   // rhythm is written in 16ths
+  let tones = c.voicing.slice(); if (arp.octaves >= 2) tones = tones.concat(c.voicing.map(m => m + 12)); if (arp.octaves >= 3) tones = tones.concat(c.voicing.map(m => m + 24));
+  tones = tones.map(m => m + 12 * ((inst && inst.octave) || 0));
+  const onsets = []; for (let k = 0; k < hit.len; k++) { const r16 = Math.floor(k / per16); if (k % per16 === 0 && arp.rhythm[r16 % 16] === "x") onsets.push(k); }
+  if (!onsets.length) onsets.push(0);
+  const seq = arp.mode === "down" ? tones.slice().reverse() : arp.mode === "updown" ? tones.concat(tones.slice(1, -1).reverse()) : tones;
+  const rnd = mulberry(hit.step * 31 + hit.degree * 7 + 1), out = [];
+  onsets.forEach((k, i) => {
+    const next = i + 1 < onsets.length ? onsets[i + 1] : hit.len, len = Math.max(1, Math.round((next - k) * arp.gate));
+    if (arp.mode === "block" || arp.mode === "strum") { tones.forEach((m, j) => out.push({ step: hit.step + k, len, midi: m, strum: arp.mode === "strum" ? j : 0 })); }
+    else if (arp.mode === "random") out.push({ step: hit.step + k, len, midi: tones[Math.floor(rnd() * tones.length)] });
+    else out.push({ step: hit.step + k, len, midi: seq[i % seq.length] });
+  });
+  return out;
+}
+function chordLayer(P, p, inst) { const out = []; for (const h of (p.chordHits || [])) out.push(...arpNotes(P, inst, h)); return out.sort((a, b) => a.step - b.step || a.midi - b.midi); }
 // Bass for a bar: what the player recorded on a bass instrument, else root on kicks and fifth on snares over the bar's chord.
 function bassEvents(P, p, bar) {
   const n = spb(P), base = bar * n;
@@ -248,6 +292,71 @@ function bassEvents(P, p, bar) {
   const steps = [...new Set([...kicks, ...snares])].sort((a, b) => a - b);
   if (!steps.length) return barChord(P, p, bar) ? [{ step: 0, midi: ch.bassRoot, len: n }] : [];
   return steps.map((s, i) => ({ step: s, midi: kicks.has(s) ? ch.bassRoot : ch.bassFifth, len: (i + 1 < steps.length ? steps[i + 1] : n) - s }));
+}
+
+// ---------- generators: drum patterns and basslines that fit the loop ----------
+// Each style: per lane, a 16-step weight row for 4/4 (12 steps for 3/4 and 6/8 styles). 1 = always, 0 = never, between = depends on density.
+const DRUM_STYLES = {
+  afrobeats:  { name: "Afrobeats", meter: "4/4", lanes: { kick: "9..3..9.3.9..3..", snare: "....9.......9...", rim: "..3...4...3..4..", hat: "8.6.8.6.8.6.8.6.", ohat: "..............5.", shaker: ".4.4.4.4.4.4.4.4", clap: "....5.......5...", lowtom: ".........3....4.", tom: "...............2" } },
+  amapiano:   { name: "Amapiano", meter: "4/4", lanes: { kick: "9......9..9.....", lowtom: "...6..6...7.6..6", shaker: "8.8.8.8.8.8.8.8.", hat: ".3.3.3.3.3.3.3.3", rim: "....8.......8...", clap: "............4...", snare: "....3.......5..." } },
+  highlife:   { name: "Highlife", meter: "4/4", lanes: { kick: "9...6...9...6...", rim: "..5..5.5..5..5.5", hat: "8.7.8.7.8.7.8.7.", shaker: ".5.5.5.5.5.5.5.5", snare: "....8.......8...", crash: "9..............." } },
+  house:      { name: "House", meter: "4/4", lanes: { kick: "9...9...9...9...", clap: "....9.......9...", hat: "6.6.6.6.6.6.6.6.", ohat: "..9...9...9...9.", shaker: ".3.3.3.3.3.3.3.3", snare: "....3.......3..." } },
+  hiphop:     { name: "Hip-hop", meter: "4/4", lanes: { kick: "9..3......9.4...", snare: "....9.......9...", hat: "8.6.8.6.8.6.8.6.", ohat: "..............5.", clap: "....4.......4...", rim: "......3.......2." } },
+  trap:       { name: "Trap", meter: "4/4", lanes: { kick: "9.....3...9..3..", snare: "........9.......", hat: "888688886888688a", ohat: "...........5....", clap: "........5......." } },
+  dembow:     { name: "Dembow", meter: "4/4", lanes: { kick: "9...9...9...9...", snare: "...9..9....9..9.", rim: ".3.....3.3.....3", hat: "6.6.6.6.6.6.6.6.", shaker: ".4.4.4.4.4.4.4.4", clap: "...5..5....5..5." } },
+  funk:       { name: "Funk", meter: "4/4", lanes: { kick: "9.3...9..39.....", snare: "....9..3....9.3.", hat: "88788878887888a8", ohat: "..........5.....", rim: ".......2........" } },
+  rock:       { name: "Rock", meter: "4/4", lanes: { kick: "9...3.9.9...3...", snare: "....9.......9...", hat: "8.8.8.8.8.8.8.8.", crash: "9...............", tom: "..............4.", lowtom: "...............4" } },
+  bossa:      { name: "Bossa nova", meter: "4/4", lanes: { kick: "9..6....9..6....", rim: "x..x..x...x..x..".replace(/x/g, "8"), hat: "7.7.7.7.7.7.7.7.", shaker: "6.6.6.6.6.6.6.6." } },
+  minimal:    { name: "Minimal", meter: "4/4", lanes: { kick: "9.......9.......", clap: "....7.......7...", hat: "..5...5...5...5.", shaker: "3.3.3.3.3.3.3.3." } },
+  waltz:      { name: "Waltz", meter: "3/4", lanes: { kick: "9...........", snare: "....7...7...", hat: "6.6.6.6.6.6.", shaker: ".3.3.3.3.3.3" } },
+  jig:        { name: "Jig", meter: "6/8", lanes: { kick: "9.....8.....", snare: "...6.....6..", hat: "8.7.7.8.7.7.", shaker: ".4.4.4.4.4.4", rim: "..3........3" } },
+  slipjig:    { name: "Slip jig", meter: "9/8", lanes: { kick: "9.....7.....7.....", hat: "8.6.6.8.6.6.8.6.6.", shaker: ".4.4.4.4.4.4.4.4.4", rim: "...5.....5.....5.." } },
+};
+function drumStylesFor(meter) { return Object.entries(DRUM_STYLES).filter(([, st]) => st.meter === meter).map(([id, st]) => ({ id, name: st.name })); }
+// density 0..1 (how many of the optional hits land), variation 0..1 (how much each bar differs), fill: tom/snare run in the last beats.
+function generateDrums(P, p, styleId, opts) {
+  opts = opts || {}; const st = DRUM_STYLES[styleId] || DRUM_STYLES.afrobeats, n = spb(P), density = opts.density == null ? 0.6 : opts.density, variation = opts.variation == null ? 0.3 : opts.variation;
+  const rnd = mulberry((opts.seed || 1) * 2654435761), rowLen = Object.values(st.lanes)[0].length, scale = n / rowLen;
+  const drums = Object.fromEntries(DRUMS.map(d => [d.id, []]));
+  for (let bar = 0; bar < p.bars; bar++) {
+    for (const [lane, row] of Object.entries(st.lanes)) {
+      if (!drums[lane]) continue;
+      for (let i = 0; i < rowLen; i++) {
+        const ch = row[i]; if (ch === ".") continue;
+        const w = (ch === "a" ? 10 : +ch) / 9, jitter = (rnd() - 0.5) * variation;
+        if (w >= 0.95 ? rnd() > variation * 0.25 : (w + jitter) > (1 - density)) drums[lane].push(bar * n + Math.round(i * scale));
+      }
+      if (variation > 0.5 && rnd() < (variation - 0.5)) { const extra = Math.floor(rnd() * n); if (!drums[lane].includes(bar * n + extra)) drums[lane].push(bar * n + extra); }   // a surprise now and then
+    }
+  }
+  if (opts.fill && p.bars > 0) {   // last two beats of the last bar: a tom/snare run
+    const bar = p.bars - 1, beat = P.grid / 4, start = bar * n + n - 2 * beat, lanes = ["snare", "tom", "tom", "lowtom", "snare", "snare", "lowtom", "lowtom"];
+    for (let k = 0; k < 2 * beat; k++) { if (rnd() < 0.8) drums[lanes[k % lanes.length]].push(start + k); }
+    drums.crash = drums.crash.filter(s => Math.floor(s / n) !== bar); 
+  }
+  for (const d of DRUMS) drums[d.id] = [...new Set(drums[d.id])].sort((a, b) => a - b);
+  return drums;
+}
+const BASS_STYLES = [
+  ["kicks", "Roots on the kicks"], ["pulse", "Pulse (every eighth)"], ["bounce", "Octave bounce"], ["walk", "Walking"], ["dembow", "Dembow"], ["amapiano", "Amapiano log drum"], ["sustain", "Sustained root"], ["fifths", "Root & fifth"],
+];
+function generateBass(P, p, styleId, opts) {   // -> [{step, len, midi}] for layers.bass
+  opts = opts || {}; const n = spb(P), beat = P.grid / 4, out = [], rnd = mulberry((opts.seed || 1) * 40503);
+  const push = (bar, s, len, midi) => { if (s < n) out.push({ step: bar * n + s, len: Math.min(len, n - s), midi }); };
+  for (let bar = 0; bar < p.bars; bar++) {
+    const c = barChord(P, p, bar) || chordInfo(P, 0), r = c.bassRoot, f = c.bassFifth, third = r + (c.voicing[1] - c.voicing[0]);
+    switch (styleId) {
+      case "pulse": for (let s = 0; s < n; s += beat / 2) push(bar, s, beat / 2, r); break;
+      case "bounce": for (let s = 0, i = 0; s < n; s += beat / 2, i++) push(bar, s, beat / 2, i % 2 ? r + 12 : r); break;
+      case "walk": { const seq = [r, third, f, rnd() < 0.5 ? f + 2 : r + 12]; for (let s = 0, i = 0; s < n; s += beat, i++) push(bar, s, beat, seq[i % seq.length]); break; }
+      case "dembow": { const pat = [[0, 3], [3, 3], [6, 2], [8, 3], [11, 3], [14, 2]]; pat.forEach(([s, l], i) => push(bar, Math.round(s * n / 16), Math.round(l * n / 16), i % 3 === 2 ? f : r)); break; }
+      case "amapiano": { const pat = [[0, 2, r], [3, 2, r], [5, 2, f], [8, 2, r], [11, 2, r], [13, 2, f + 12 > 59 ? f : f], [15, 1, r + 12]]; pat.forEach(([s, l, m]) => push(bar, Math.round(s * n / 16), Math.max(1, Math.round(l * n / 16)), m)); break; }
+      case "sustain": push(bar, 0, n, r); break;
+      case "fifths": for (let s = 0, i = 0; s < n; s += beat, i++) push(bar, s, beat, i % 2 ? f : r); break;
+      default: { const kicks = [...new Set(p.drums.kick.filter(s => s >= bar * n && s < (bar + 1) * n).map(s => s - bar * n))].sort((a, b) => a - b); if (!kicks.length) kicks.push(0); kicks.forEach((s, i) => push(bar, s, (i + 1 < kicks.length ? kicks[i + 1] : n) - s, r)); }
+    }
+  }
+  return out;
 }
 
 // ---------- editing ----------
@@ -274,7 +383,7 @@ function addLayerNote(P, p, layer, abs, midi, len, mono) {
 function setBars(P, p, bars) {
   const n = spb(P), max = bars * n;
   p.bars = bars; for (const d of DRUMS) p.drums[d.id] = p.drums[d.id].filter(s => s < max);
-  p.melody = p.melody.filter(x => x.step < max);
+  p.melody = p.melody.filter(x => x.step < max); p.chordHits = (p.chordHits || []).filter(x => x.step < max);
   for (const k of Object.keys(p.layers)) p.layers[k] = p.layers[k].filter(x => x.step < max);
   p.chords = Array.from({ length: bars }, (_, i) => p.chords[i] != null ? p.chords[i] : -1);
 }
@@ -285,6 +394,7 @@ function remapSteps(P, oldSpb, newSpb, ratio) {   // keep the groove's shape acr
     const fix = list => { const out = []; for (const x of list) { const s = map(x.step); if (s < 0) continue; out.push({ ...x, step: s, len: clamp(Math.round(x.len * ratio), 1, newSpb - s % newSpb) }); } return out; };
     const notes = fix(p.melody);
     p.melody = notes.filter((x, i) => !notes.some((y, j) => j < i && y.step < x.step + x.len && y.step + y.len > x.step));
+    p.chordHits = fix(p.chordHits || []);
     for (const k of Object.keys(p.layers)) p.layers[k] = fix(p.layers[k]);
   }
 }
@@ -294,13 +404,13 @@ function clearBar(P, p, bar, what) {
   if (what === "melody" || what === "all") p.melody = p.melody.filter(keep);
   if (what === "layers" || what === "all") for (const k of Object.keys(p.layers)) p.layers[k] = p.layers[k].filter(keep);
   if (what && what.startsWith("layer:")) { const k = what.slice(6); if (p.layers[k]) p.layers[k] = p.layers[k].filter(keep); }
-  if (what === "chords" || what === "all") p.chords[bar] = -1;
+  if (what === "chords" || what === "all") { p.chords[bar] = -1; p.chordHits = (p.chordHits || []).filter(keep); }
 }
 function copyBarNext(P, p, bar) {
   const n = spb(P); if (bar + 1 >= p.bars) return false;
   const a = bar * n, b = (bar + 1) * n, shift = list => list.filter(x => x.step < b || x.step >= b + n).concat(list.filter(x => x.step >= a && x.step < b).map(x => ({ ...x, step: x.step + n }))).sort((x, y) => x.step - y.step);
   for (const d of DRUMS) p.drums[d.id] = [...new Set(p.drums[d.id].filter(s => s < b || s >= b + n).concat(p.drums[d.id].filter(s => s >= a && s < b).map(s => s + n)))].sort((x, y) => x - y);
-  p.melody = shift(p.melody); for (const k of Object.keys(p.layers)) p.layers[k] = shift(p.layers[k]);
+  p.melody = shift(p.melody); p.chordHits = shift(p.chordHits || []); for (const k of Object.keys(p.layers)) p.layers[k] = shift(p.layers[k]);
   p.chords[bar + 1] = p.chords[bar]; return true;
 }
 
@@ -311,7 +421,7 @@ function instEvents(P, p, inst, bar) {   // events of an instrument in a pattern
     case "voice": return p.melody.filter(inBar);
     case "drums": { const out = []; for (const d of DRUMS) for (const s of p.drums[d.id]) if (bar == null || (s >= bar * n && s < (bar + 1) * n)) out.push({ step: s, len: 1 }); return out; }
     case "bass": return (p.layers.bass || []).filter(inBar);
-    case "chords": { const out = []; p.chords.forEach((c, b) => { if (c >= 0 && (bar == null || b === bar)) out.push({ step: b * n, len: n }); }); return out; }
+    case "chords": { if ((p.chordHits || []).length) return p.chordHits.filter(inBar); const out = []; p.chords.forEach((c, b) => { if (c >= 0 && (bar == null || b === bar)) out.push({ step: b * n, len: n }); }); return out; }
     default: return (p.layers[inst.id] || []).filter(inBar);
   }
 }
@@ -326,7 +436,7 @@ function clearInstrument(P, p, inst, bar) {   // remove an instrument's content 
     case "voice": p.melody = p.melody.filter(keep); break;
     case "drums": for (const d of DRUMS) p.drums[d.id] = p.drums[d.id].filter(s => bar != null && (s < bar * n || s >= (bar + 1) * n)); break;
     case "bass": if (p.layers.bass) p.layers.bass = p.layers.bass.filter(keep); break;
-    case "chords": if (bar == null) p.chords = p.chords.map(() => -1); else p.chords[bar] = -1; break;
+    case "chords": if (bar == null) { p.chords = p.chords.map(() => -1); p.chordHits = []; } else { p.chords[bar] = -1; p.chordHits = (p.chordHits || []).filter(keep); } break;
     default: if (p.layers[inst.id]) p.layers[inst.id] = p.layers[inst.id].filter(keep);
   }
 }
@@ -340,22 +450,37 @@ function abcPitch(midi, barState, k) {
   let acc = ""; if (sp.alt !== active) { acc = ACC_TEXT[sp.alt]; barState[L] = sp.alt; }
   return acc + (sp.octave >= 5 ? L.toLowerCase() + "'".repeat(sp.octave - 5) : L + ",".repeat(4 - sp.octave));
 }
-function eventsBar(P, events, n, k, prefix) {   // monophonic [{step, midi, len}] (step relative to bar) -> bar text
-  if (!events.length) return prefix ? prefix + rests(n) : "Z";
-  const st = {}; let out = prefix || "", cursor = 0;
-  for (const e of events) { if (e.step < cursor) continue; const len = Math.min(e.len, n - e.step); if (e.step > cursor) out += rests(e.step - cursor); out += abcPitch(e.midi, st, k) + dur(len); cursor = e.step + len; }
-  if (cursor < n) out += rests(n - cursor);
+function eventsBar(P, events, n, k, prefix, symbols) {   // monophonic [{step, midi, len}] (step relative to bar) -> bar text; symbols: {relStep: '"C"'}
+  symbols = symbols || (prefix ? { 0: prefix } : {});
+  const symAt = s => symbols[s] || "";
+  const restRun = (from, to) => { let out = ""; const cuts = Object.keys(symbols).map(Number).filter(s => s > from && s < to).sort((a, b) => a - b); let c = from; for (const s of cuts) { out += rests(s - c) + symAt(s); c = s; } return out + rests(to - c); };
+  if (!events.length) return Object.keys(symbols).length ? symAt(0) + restRun(0, n) : "Z";
+  const st = {}; let out = "", cursor = 0;
+  for (const e of events) {
+    if (e.step < cursor) continue; const len = Math.min(e.len, n - e.step);
+    if (e.step > cursor) out += symAt(cursor) + restRun(cursor, e.step);
+    let sym = symAt(e.step); if (!sym) { for (let s = e.step + 1; s < e.step + len; s++) if (symbols[s]) { sym = symbols[s]; break; } }   // a strike inside a held note rides its start
+    out += sym + abcPitch(e.midi, st, k) + dur(len); cursor = e.step + len;
+  }
+  if (cursor < n) out += symAt(cursor) + restRun(cursor, n);
   return out;
 }
 function vocalBar(P, p, bar, withChords, k) {
-  const n = spb(P), base = bar * n, ch = withChords ? barChord(P, p, bar) : null;
+  const n = spb(P), base = bar * n;
   const ev = p.melody.filter(x => x.step >= base && x.step < base + n).sort((a, b) => a.step - b.step).map(x => ({ step: x.step - base, midi: midiOfRow(P, x.row), len: x.len }));
-  return eventsBar(P, ev, n, k, ch ? `"${ch.symbol}"` : "");
+  let symbols = null;
+  if (withChords) {
+    const hits = hitsInBar(P, p, bar);
+    if (hits.length) { symbols = {}; for (const h of hits) { const c = chordInfo(P, h.degree); if (c) symbols[h.step - base] = `"${c.symbol}"`; } }
+    else { const ch = barChord(P, p, bar); if (ch) symbols = { 0: `"${ch.symbol}"` }; }
+  }
+  return eventsBar(P, ev, n, k, "", symbols || {});
 }
 function insBar(P, p, bar, k) { return eventsBar(P, bassEvents(P, p, bar), spb(P), k, ""); }
-function layerBar(P, p, layer, bar, k) {   // polyphonic layer -> chords in brackets, duration until the next onset
+function layerBar(P, p, layer, bar, k) { return polyBar(P, p.layers[layer] || [], bar, k); }
+function polyBar(P, events, bar, k) {   // polyphonic events -> chords in brackets, duration until the next onset
   const n = spb(P), base = bar * n, byStep = new Map();
-  for (const x of (p.layers[layer] || [])) if (x.step >= base && x.step < base + n) { const s = x.step - base; if (!byStep.has(s)) byStep.set(s, []); byStep.get(s).push(x); }
+  for (const x of events) if (x.step >= base && x.step < base + n) { const s = x.step - base; if (!byStep.has(s)) byStep.set(s, []); byStep.get(s).push(x); }
   const steps = [...byStep.keys()].sort((a, b) => a - b);
   if (!steps.length) return "Z";
   const st = {}; let out = "", cursor = 0;
@@ -392,23 +517,27 @@ function exportYuE2(P, withChords) {
   }
   return out.join("\n") + "\n";
 }
-function layerIds(P) {   // extra layers that actually hold notes, in deck order
-  const ids = new Set(); for (const p of P.patterns) for (const k of Object.keys(p.layers)) if (k !== "bass" && p.layers[k].length) ids.add(k);
+function layerIds(P) {   // extra layers that actually hold notes, in deck order (sweeps and hits have no notation)
+  const fx = new Set(P.deck.filter(i => i.role === "fx").map(i => i.id));
+  const ids = new Set(); for (const p of P.patterns) for (const k of Object.keys(p.layers)) if (k !== "bass" && !fx.has(k) && p.layers[k].length) ids.add(k);
   return [...ids].sort((a, b) => P.deck.findIndex(i => i.id === a) - P.deck.findIndex(i => i.id === b));
 }
 function exportStandard(P) {
   const k = keyInfo(P), out = header(P, k), layers = layerIds(P);
   out.splice(out.length - 1, 0, ...DRUMS.map(d => `%%percmap ${d.perc} ${d.gm}${d.head ? " " + d.head : ""}`));
+  const chordInst = P.deck.find(i => i.role === "chords") || null, hasHits = P.patterns.some(p => (p.chordHits || []).length);
+  const voices = layers.map(id => ({ name: (P.deck.find(x => x.id === id) || { name: id }).name, events: p => p.layers[id] || [] }));
+  if (hasHits) voices.unshift({ name: chordInst ? chordInst.name : "Chords", events: p => chordLayer(P, p, chordInst) });
   out.push(`V:1 clef=treble name="Melody"`, `V:2 clef=bass name="Bass"`);
-  layers.forEach((id, i) => { const inst = P.deck.find(x => x.id === id); out.push(`V:${i + 3} clef=treble name="${(inst ? inst.name : id).replace(/"/g, "")}"`); });
-  out.push(`V:${layers.length + 3} clef=perc name="Drums"`);
+  voices.forEach((v, i) => out.push(`V:${i + 3} clef=treble name="${v.name.replace(/"/g, "")}"`));
+  out.push(`V:${voices.length + 3} clef=perc name="Drums"`);
   for (const part of songParts(P)) {
     const bars = sectionBars(P, part);
     out.push(`% ${part.section}`);
     out.push("[V:1]", ...lines(bars.map(([p, b]) => vocalBar(P, p, b, true, k))));
     out.push("[V:2]", ...lines(bars.map(([p, b]) => insBar(P, p, b, k))));
-    layers.forEach((id, i) => out.push(`[V:${i + 3}]`, ...lines(bars.map(([p, b]) => layerBar(P, p, id, b, k)))));
-    out.push(`[V:${layers.length + 3}]`, "%%MIDI channel 10", ...lines(bars.map(([p, b]) => drumBar(P, p, b))));
+    voices.forEach((v, i) => out.push(`[V:${i + 3}]`, ...lines(bars.map(([p, b]) => polyBar(P, v.events(p), b, k)))));
+    out.push(`[V:${voices.length + 3}]`, "%%MIDI channel 10", ...lines(bars.map(([p, b]) => drumBar(P, p, b))));
   }
   return out.join("\n") + "\n";
 }
@@ -511,7 +640,11 @@ function Sequencer(opts) {   // opts: project(), currentPattern(), synth(), onSt
       for (const note of p.melody) if (note.step === abs) sy.note(sy.channelFor("voice"), midiOfRow(Pj, note.row), t, note.len * sd * 0.95, 0.9);
       for (const id of Object.keys(p.layers)) { if (id === "bass") continue; for (const x of p.layers[id]) if (x.step === abs) sy.note(sy.channelFor(id), x.midi, t, x.len * sd * 0.95, 0.85); }
       if (o.hearBass !== false) for (const e of bassEvents(Pj, p, entry.bar)) if (e.step === sIn) sy.note(sy.channelFor("bass"), e.midi, t, e.len * sd * 0.9, 0.95);
-      if (sIn === 0 && o.hearChords !== false) { const c = barChord(Pj, p, entry.bar); if (c) sy.chord(sy.channelFor("chords"), c.voicing, t, n * sd * 0.98, 0.55); }
+      if (o.hearChords !== false) {
+        const chordInst = Pj.deck.find(i => i.role === "chords") || null, hits = hitsInBar(Pj, p, entry.bar);
+        if (hits.length) { for (const h of hits) for (const x of arpNotes(Pj, chordInst, h)) if (x.step === abs) sy.note(sy.channelFor("chords"), x.midi, t + (x.strum || 0) * 0.025, x.len * sd * 0.95, 0.7); }
+        else if (sIn === 0) { const c = barChord(Pj, p, entry.bar); if (c) sy.chord(sy.channelFor("chords"), c.voicing, t, n * sd * 0.98, 0.55); }
+      }
       if (opts.onStep) { const delay = Math.max(0, (S.nextTime - now()) * 1000); S.uiTimers.push(setTimeout(() => { S.uiTimers.shift(); opts.onStep(sIn, entry, p); }, delay)); }
       S.nextTime += sd; S.pos = (S.pos + 1) % S.total;
       if (S.pos === 0) { S.anchorTime = S.nextTime; const seq = buildSeq(); S.seq = seq; S.total = seq.length * n; }
@@ -689,7 +822,8 @@ function importAbc(P, text) {
 }
 
 window.Groove = { uid, clone, clamp, KEYS, SCALES, DRUMS, DRUM_BY_ID, SECTION_TYPES, METERS, SOUNDS, GM_SOUNDS, GM_FAMILIES, SOUND_BY_ID, STAGE_STANDIN, FULL_SOUNDFONT_URL, CONTROLLERS, ROLE_LABEL, SOLFEGE,
-  meterParts, instEvents, density, clearInstrument, importAbc,
+  meterParts, instEvents, density, clearInstrument, importAbc, hitsInBar, addChordHit, arpNotes, chordLayer, DEFAULT_ARP, ARP_MODES, ARP_RHYTHMS,
+  DRUM_STYLES, drumStylesFor, generateDrums, BASS_STYLES, generateBass, mulberry,
   newPattern, defaultDeck, demoProject, blankProject, normalizeProject, beats, spb, scaleDef, nRows, tonicPc, midiOfRow, rowOfMidi, keyInfo, noteName, rowName,
   chordInfo, barChord, bassEvents, toggleDrum, addDrumHit, addMelodyNote, noteAt, addLayerNote, setBars, remapSteps, clearBar, copyBarNext,
   exportYuE2, exportStandard, exportAbc, scorePackage, checkAbc, encodeM3DS, byId, layerIds,

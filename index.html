@@ -118,7 +118,26 @@
   .ring { position: absolute; border-radius: 50%; border: 2px solid rgba(255,255,255,.22); background: radial-gradient(circle at 50% 35%, rgba(255,255,255,.05), transparent 70%); display: flex; justify-content: center; align-items: flex-start; padding-top: 6px; font-size: 11px; color: var(--muted); font-weight: 600; }
   .ring.tonic { border-color: color-mix(in srgb, var(--inst) 70%, #fff); color: var(--ink); }
   .ring.hit { background: color-mix(in srgb, var(--inst) 50%, transparent); border-color: #fff; color: #fff; }
-  .chordgrid { position: absolute; inset: 8px; display: grid; grid-template-rows: auto 1fr; gap: 8px; }
+  .chordgrid { position: absolute; inset: 8px; display: grid; grid-template-rows: auto auto 1fr; gap: 8px; }
+  .arpbar { display: flex; gap: 6px; align-items: center; flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .arpbar::-webkit-scrollbar { display: none; }
+  .arpbar > * { flex: 0 0 auto; }
+  .arpbar select { width: auto; min-height: 34px; padding: 4px 24px 4px 8px; font-size: 13px; }
+  .arpbar .seg button { min-height: 34px; min-width: 40px; padding: 2px 8px; font-size: 13px; }
+  .rhythm { display: grid; grid-template-columns: repeat(16, 1fr); gap: 2px; width: 150px; }
+  .rhythm i { display: block; height: 22px; border-radius: 3px; background: rgba(255,255,255,.1); cursor: pointer; }
+  .rhythm i:nth-child(4n+1) { background: rgba(255,255,255,.18); }
+  .rhythm i.on { background: var(--inst); }
+  .roll { display: grid; gap: 4px; grid-template-columns: 34px repeat(var(--c), 1fr); grid-auto-rows: 1fr; min-height: 0; }
+  .roll .lab { font-size: 11px; color: var(--muted); display: flex; align-items: center; justify-content: flex-end; padding-right: 4px; white-space: nowrap; overflow: hidden; }
+  .rcell { border-radius: 6px; background: rgba(255,255,255,.06); min-height: 0; position: relative; }
+  .rcell.beat { background: rgba(255,255,255,.12); }
+  .rcell.on { background: var(--inst); box-shadow: 0 0 10px color-mix(in srgb, var(--inst) 60%, transparent); }
+  .rcell.on.tail { opacity: .55; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+  .rcell.on.head.cont { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+  .rcell.now { outline: 2px solid #fff; outline-offset: -2px; }
+  .fxpads { position: absolute; inset: 8px; display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .fxpads .pad { font-size: 17px; }
   .barsel { display: flex; gap: 6px; flex-wrap: wrap; }
   .barsel button { flex: 1; min-height: 44px; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0; line-height: 1.1; padding: 4px; }
   .barsel button small { color: var(--muted); font-size: 11px; }
@@ -247,6 +266,7 @@
     <div class="inst-bar" id="instBar">
       <div class="name" id="instName">Voice<small>Keys</small></div>
       <span class="seg" id="octSeg" aria-label="Octave"><button data-d="-1" title="Octave down">−8</button><button data-d="1" title="Octave up">+8</button></span>
+      <button id="genInst" class="wide hidden" title="Print a pattern into this loop">Generate</button>
       <button id="clearInst" class="wide" title="Remove this instrument's notes from this loop">Clear</button>
       <button id="editInst" class="wide" aria-label="Change this instrument">Change</button>
       <button id="instMore" class="narrow" aria-label="More for this instrument">⋯</button>
@@ -285,6 +305,7 @@
   <a href="editor.html" style="padding:10px 12px; font-size:14px">Score editor →</a>
 </div>
 <div class="pop hidden" id="instPop">
+  <button id="popGen" class="hidden">Generate a pattern…</button>
   <button id="popClear">Clear this instrument in this loop</button>
   <button id="popChange">Change instrument…</button>
   <button id="popAdd">Add an instrument…</button>
@@ -376,6 +397,20 @@
     <div id="lib" class="list"></div>
     <div class="row"><button id="exportJson">Export file</button><button id="importJson">Import file</button><input id="importFile" type="file" accept=".json,application/json" hidden></div>
     <p class="muted">Grooves are kept in this browser. Export a file to move one to another device.</p>
+  </div>
+</section>
+
+<section class="sheet" id="sheetGen" aria-label="Generate">
+  <header><h2 id="genTitle">Print a drum pattern</h2><button class="close ghost">Done</button></header>
+  <div class="body">
+    <label class="field"><span>Style</span><select id="genStyle"></select></label>
+    <div id="genDrumOpts">
+      <label class="field"><span>Density <output id="genDensityOut"></output></span><input id="genDensity" type="range" min="0" max="100" step="5" value="60"></label>
+      <label class="field"><span>Variation between bars <output id="genVarOut"></output></span><input id="genVar" type="range" min="0" max="100" step="5" value="30"></label>
+      <label class="row" style="gap:6px"><input id="genFill" type="checkbox" checked style="width:auto"> fill at the end of the loop</label>
+    </div>
+    <p class="muted" id="genNote" style="margin:0"></p>
+    <div class="row"><button id="genPrint" class="on" style="flex:1">Print into this loop</button><button id="genAdd">Add on top</button><button id="genReroll">Another take</button></div>
   </div>
 </section>
 
@@ -617,21 +652,89 @@ CTRL.rings = {
     this.unmount = () => ro.disconnect();
   },
 };
+// Chords: strike pads (live, with the held length) or place strikes on the roll; the arpeggiator decides how a strike plays.
 CTRL.chords = {
-  mount(el) {
+  mount(el, i) {
     const wrap = document.createElement("div"); wrap.className = "chordgrid"; el.appendChild(wrap);
+    const arpbar = document.createElement("div"); arpbar.className = "arpbar"; wrap.appendChild(arpbar);
     const bars = document.createElement("div"); bars.className = "barsel"; wrap.appendChild(bars);
-    const grid = document.createElement("div"); grid.className = "chordpads"; wrap.appendChild(grid);
-    let sel = Math.min(liveBar, pat().bars - 1);
+    const body = document.createElement("div"); body.style.minHeight = "0"; body.style.position = "relative"; wrap.appendChild(body);
+    i.arp = { ...G.DEFAULT_ARP, ...(i.arp || {}) }; let mode = i.chordView || "pads", sel = Math.min(liveBar, pat().bars - 1), hold = i.hold || 4;
+    const res = 2, steps = n(), cols = Math.ceil(steps / res);
+    // arpeggiator strip
+    const seg = document.createElement("span"); seg.className = "seg"; [["pads", "Pads"], ["roll", "Roll"]].forEach(([v, l]) => { const b = document.createElement("button"); b.textContent = l; b.className = v === mode ? "on" : ""; b.onclick = () => { mode = i.chordView = v; changed(); render(); }; seg.appendChild(b); }); arpbar.appendChild(seg);
+    const modeSel = document.createElement("select"); G.ARP_MODES.forEach(([v, l]) => { const o = document.createElement("option"); o.value = v; o.textContent = l; modeSel.appendChild(o); }); modeSel.value = i.arp.mode; modeSel.onchange = () => { i.arp.mode = modeSel.value; changed(); }; arpbar.appendChild(modeSel);
+    const rhySel = document.createElement("select"); G.ARP_RHYTHMS.forEach(([v, l, say]) => { const o = document.createElement("option"); o.value = v; o.textContent = l + " · " + say; rhySel.appendChild(o); }); const custom = document.createElement("option"); custom.value = "custom"; custom.textContent = "Custom"; rhySel.appendChild(custom);
+    const rhythmEl = document.createElement("div"); rhythmEl.className = "rhythm"; rhythmEl.title = "The strike's rhythm, in sixteenths";
+    const drawRhythm = () => { rhythmEl.innerHTML = ""; for (let k = 0; k < 16; k++) { const c = document.createElement("i"); c.className = i.arp.rhythm[k] === "x" ? "on" : ""; c.onclick = () => { const r = i.arp.rhythm.split(""); r[k] = r[k] === "x" ? "-" : "x"; i.arp.rhythm = r.join(""); changed(); syncRhy(); drawRhythm(); }; rhythmEl.appendChild(c); } };
+    const syncRhy = () => { rhySel.value = G.ARP_RHYTHMS.some(([v]) => v === i.arp.rhythm) ? i.arp.rhythm : "custom"; };
+    rhySel.onchange = () => { if (rhySel.value !== "custom") { i.arp.rhythm = rhySel.value; changed(); drawRhythm(); } }; syncRhy(); drawRhythm();
+    arpbar.appendChild(rhySel); arpbar.appendChild(rhythmEl);
+    const oct = document.createElement("span"); oct.className = "seg"; [1, 2, 3].forEach(v => { const b = document.createElement("button"); b.textContent = v + (v === 1 ? " oct" : ""); b.className = v === (i.arp.octaves || 1) ? "on" : ""; b.onclick = () => { i.arp.octaves = v; changed(); oct.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); }; oct.appendChild(b); }); arpbar.appendChild(oct);
+    const holdSeg = document.createElement("span"); holdSeg.className = "seg"; holdSeg.title = "How long a placed strike holds";
+    [[P.grid / 8, "♪"], [P.grid / 4, "♩"], [P.grid / 2, "𝅗𝅥"], [steps, "bar"]].forEach(([v, l]) => { const b = document.createElement("button"); b.textContent = l; b.className = v === hold ? "on" : ""; b.onclick = () => { hold = i.hold = v; changed(); holdSeg.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b)); }; holdSeg.appendChild(b); }); arpbar.appendChild(holdSeg);
     const renderBars = () => {
       bars.innerHTML = ""; const p = pat(), live = api.currentBar();
-      for (let b = 0; b < p.bars; b++) { const c = G.barChord(P, p, b), btn = document.createElement("button"); btn.className = (b === sel ? "on" : "") + (b === live ? " live" : ""); btn.innerHTML = `${c ? c.symbol : "—"}<small>bar ${b + 1}</small>`; btn.onclick = () => { sel = b; renderBars(); }; bars.appendChild(btn); }
+      for (let b = 0; b < p.bars; b++) { const c = G.barChord(P, p, b), hits = G.hitsInBar(P, p, b).length, btn = document.createElement("button"); btn.className = (b === sel ? "on" : "") + (b === live ? " live" : ""); btn.innerHTML = `${c ? c.symbol : "—"}<small>bar ${b + 1}${hits ? " · " + hits + "×" : ""}</small>`; btn.onclick = () => { sel = b; render(); }; bars.appendChild(btn); }
     };
-    renderBars();
-    const pads = [{ degree: -1, symbol: "—", numeral: "no chord" }].concat([0, 1, 2, 3, 4, 5, 6].map(d => G.chordInfo(P, d)));
-    for (const c of pads) { const b = document.createElement("div"); b.className = "pad"; b.innerHTML = `${c.symbol}<small>${c.numeral}</small>`; b._c = c; grid.appendChild(b); }
-    el.onpointerdown = e => { const b = e.target.closest(".pad"); if (!b) return; b.classList.add("hit"); setTimeout(() => b.classList.remove("hit"), 120); const t = api.chord(b._c.degree, sel); if (t >= 0) sel = t; renderBars(); };
-    this.onBar = () => renderBars();
+    const degrees = [0, 1, 2, 3, 4, 5, 6].map(d => G.chordInfo(P, d));
+    const held = new Map();
+    const render = () => {
+      renderBars(); body.innerHTML = ""; seg.querySelectorAll("button").forEach((b, k) => b.classList.toggle("on", ["pads", "roll"][k] === mode));
+      if (mode === "pads") {
+        const grid = document.createElement("div"); grid.className = "chordpads"; grid.style.position = "absolute"; grid.style.inset = "0"; body.appendChild(grid);
+        [{ degree: -1, symbol: "—", numeral: "no chord" }].concat(degrees).forEach(c => { const b = document.createElement("div"); b.className = "pad"; b.innerHTML = `${c.symbol}<small>${c.numeral}</small>`; b._c = c; grid.appendChild(b); });
+      } else {
+        const roll = document.createElement("div"); roll.className = "roll"; roll.style.position = "absolute"; roll.style.inset = "0"; roll.style.setProperty("--c", cols); body.appendChild(roll);
+        const p = pat(), base = sel * steps, perBeat = P.grid / 4 / res;
+        for (let d = 6; d >= 0; d--) {
+          const lab = document.createElement("div"); lab.className = "lab"; lab.textContent = degrees[d].symbol; roll.appendChild(lab);
+          for (let c = 0; c < cols; c++) {
+            const abs = base + c * res, hit = (p.chordHits || []).find(h => h.step <= abs && abs < h.step + h.len && h.degree === d), cell = document.createElement("div");
+            cell.className = "rcell" + (c % perBeat === 0 ? " beat" : "") + (hit ? " on" + (hit.step === abs ? " head" : " tail") + (hit.step + hit.len > abs + res ? " cont" : "") : "");
+            cell.dataset.col = c; cell._abs = abs; cell._d = d; roll.appendChild(cell);
+          }
+        }
+      }
+    };
+    render();
+    el.onpointerdown = e => {
+      const pad = e.target.closest(".pad"), cell = e.target.closest(".rcell"); SY.ensure();
+      if (pad) {
+        pad.classList.add("hit"); const c = pad._c, info = G.chordInfo(P, c.degree);
+        if (info) { const ch = SY.channelFor(inst().id); if (i.arp.mode === "block" || i.arp.mode === "strum") info.voicing.forEach((m, j) => SY.noteOn("c" + e.pointerId + "_" + j, ch, m + 12 * (i.octave || 0), 0.8)); else SY.chord(ch, info.voicing.map(m => m + 12 * (i.octave || 0)), SY.now(), 0.6, 0.7); }
+        held.set(e.pointerId, { pad, degree: c.degree, t0: SY.now(), q: recArmed && seq.playing ? seq.quantizedHit() : null, voices: info ? info.voicing.length : 0 });
+        if (!seq.playing || !recArmed) { const target = seq.playing ? liveBar : sel; const p = pat(); if (target >= 0 && target < p.bars) { p.chords[target] = c.degree; if (c.degree < 0) p.chordHits = (p.chordHits || []).filter(h => h.step < target * steps || h.step >= (target + 1) * steps); changed(); renderBars(); } }
+        return;
+      }
+      if (cell) {
+        const p = pat(), hit = (p.chordHits || []).find(h => h.step <= cell._abs && cell._abs < h.step + h.len && h.degree === cell._d);
+        if (hit) p.chordHits = p.chordHits.filter(h => h !== hit); else { G.addChordHit(P, p, cell._abs, cell._d, hold); const info = degrees[cell._d]; SY.chord(SY.channelFor(inst().id), info.voicing.map(m => m + 12 * (i.octave || 0)), SY.now(), 0.5, 0.7); }
+        changed(); render();
+      }
+    };
+    const up = e => {
+      const h = held.get(e.pointerId); if (!h) return; held.delete(e.pointerId); h.pad.classList.remove("hit");
+      for (let j = 0; j < h.voices; j++) SY.noteOff("c" + e.pointerId + "_" + j);
+      if (h.q && h.degree >= 0) { const len = G.clamp(seq.stepsHeld(SY.now() - h.t0), 1, steps - h.q.abs % steps); G.addChordHit(P, h.q.p, h.q.abs, h.degree, len); changed(); if (h.q.p === pat()) renderBars(); }
+    };
+    el.onpointerup = el.onpointercancel = up;
+    this.onBar = b => { if (mode === "roll" && seq.playing) { sel = b; render(); } else renderBars(); };
+    this.onStep = (sIn, entry, p) => { body.querySelectorAll(".rcell.now").forEach(x => x.classList.remove("now")); if (mode !== "roll" || p !== pat() || entry.bar !== sel) return; body.querySelectorAll(`.rcell[data-col="${Math.floor(sIn / res)}"]`).forEach(x => x.classList.add("now")); };
+  },
+};
+CTRL.fxpads = {
+  mount(el, i) {
+    const grid = document.createElement("div"); grid.className = "fxpads"; el.appendChild(grid);
+    const steps = n(), items = [["Rise · 1 bar", steps], ["Rise · 2 bars", steps * 2], ["Rise · 4 bars", steps * 4], ["Hold to sweep", 0]];
+    for (const [label, len] of items) { const b = document.createElement("div"); b.className = "pad"; b.innerHTML = `${label}<small>${len ? "lands on the next downbeat after " + (len / steps) + " bar(s)" : "as long as you press"}</small>`; b._len = len; grid.appendChild(b); }
+    const held = new Map();
+    el.onpointerdown = e => {
+      const b = e.target.closest(".pad"); if (!b) return; b.classList.add("hit"); SY.ensure();
+      if (b._len) { const len = b._len, dur = len * seq.stepDur(); SY.note(SY.channelFor(i.id), 60, SY.now(), dur, 0.9); if (recArmed && seq.playing) { const q = seq.quantizedHit(); const start = Math.max(0, q.abs - (q.abs % steps)); G.addLayerNote(P, q.p, i.id, start, 60, Math.min(len, q.p.bars * steps - start), true); changed(); } setTimeout(() => b.classList.remove("hit"), 150); }
+      else { SY.noteOn("fx" + e.pointerId, SY.channelFor(i.id), 60, 0.9); held.set(e.pointerId, { b, t0: SY.now(), q: recArmed && seq.playing ? seq.quantizedHit() : null }); }
+    };
+    el.onpointerup = el.onpointercancel = e => { const h = held.get(e.pointerId); if (!h) return; held.delete(e.pointerId); h.b.classList.remove("hit"); SY.noteOff("fx" + e.pointerId); if (h.q) { const len = G.clamp(seq.stepsHeld(SY.now() - h.t0), 1, steps * 4); G.addLayerNote(P, h.q.p, i.id, h.q.abs, 60, len, true); changed(); } };
   },
 };
 function mountController() {
@@ -642,7 +745,8 @@ function mountController() {
   $("stage").style.setProperty("--inst", i.color); $("surface").style.setProperty("--inst", i.color);
   const cdef = G.CONTROLLERS.find(c => c.id === i.controller), s = soundOf(i), standin = P.soundSet !== "full" && s.full;
   $("instName").innerHTML = `${i.name}<small>${s.name}${standin ? " (stand-in sound until the full set is on)" : ""} · ${cdef ? cdef.name : ""}</small>`;
-  $("octSeg").style.visibility = i.role === "drums" || i.role === "chords" ? "hidden" : "visible";
+  $("octSeg").style.visibility = i.role === "drums" || i.role === "fx" ? "hidden" : "visible";
+  const canGen = i.role === "drums" || i.role === "bass"; $("genInst").classList.toggle("hidden", !canGen); $("popGen").classList.toggle("hidden", !canGen);
   hint();
 }
 
@@ -774,10 +878,36 @@ $("openLibrary").onclick = () => { openSheet("sheetLibrary"); loadTunes(); };
 $("editInst").onclick = () => openInstSheet(curInst);
 $("clearInst").onclick = () => armed($("clearInst"), () => { G.clearInstrument(P, pat(), inst()); changed(); mountController(); setStatus(inst().name + " cleared in " + pat().name + ".", "ok"); });
 
+// generate sheet (drums and bass)
+let genSeed = 1;
+function openGen() {
+  const i = inst(), drums = i.role === "drums"; genSeed = 1;
+  $("genTitle").textContent = drums ? "Print a drum pattern into " + pat().name : "Print a bassline into " + pat().name;
+  const sel = $("genStyle"); sel.innerHTML = "";
+  (drums ? G.drumStylesFor(P.meter).map(s => [s.id, s.name]) : G.BASS_STYLES).forEach(([v, l]) => { const o = document.createElement("option"); o.value = v; o.textContent = l; sel.appendChild(o); });
+  if (drums && !sel.options.length) { const o = document.createElement("option"); o.value = ""; o.textContent = "No styles for " + P.meter + " yet"; sel.appendChild(o); }
+  $("genDrumOpts").style.display = drums ? "" : "none"; $("genDensityOut").value = $("genDensity").value + "%"; $("genVarOut").value = $("genVar").value + "%";
+  $("genNote").textContent = drums ? "Patterns follow the loop's meter. Density decides how many of the optional hits land; variation makes bars differ. Print replaces this loop's drums; Add keeps what's there." : "Basslines follow the chord of each bar (a strike or the bar's chord pad). Print replaces this loop's bass line; Add keeps what's there.";
+  $("genAdd").style.display = drums ? "" : "none";
+  openSheet("sheetGen");
+}
+function runGen(add) {
+  const i = inst(), p = pat(), drums = i.role === "drums", style = $("genStyle").value; if (!style) return;
+  if (drums) {
+    const d = G.generateDrums(P, p, style, { density: +$("genDensity").value / 100, variation: +$("genVar").value / 100, fill: $("genFill").checked, seed: genSeed });
+    for (const lane of G.DRUMS) p.drums[lane.id] = add ? [...new Set(p.drums[lane.id].concat(d[lane.id]))].sort((a, b) => a - b) : d[lane.id];
+  } else p.layers.bass = G.generateBass(P, p, style, { seed: genSeed });
+  changed(); mountController(); setStatus((drums ? G.DRUM_STYLES[style].name + " drums" : "Bassline") + " printed into " + p.name + ".", "ok");
+  if (!seq.playing) togglePlay();
+}
+$("genInst").onclick = openGen; $("popGen").onclick = () => { hidePops(); openGen(); };
+$("genDensity").oninput = () => { $("genDensityOut").value = $("genDensity").value + "%"; }; $("genVar").oninput = () => { $("genVarOut").value = $("genVar").value + "%"; };
+$("genPrint").onclick = () => runGen(false); $("genAdd").onclick = () => runGen(true); $("genReroll").onclick = () => { genSeed++; runGen(false); };
+
 // instrument sheet
 function soundGroups() {
   const groups = [];
-  for (const role of ["voice", "drums", "bass", "chords", "layer"]) {
+  for (const role of ["voice", "drums", "bass", "chords", "layer", "fx"]) {
     const list = role === "chords" ? G.SOUNDS.filter(s => ["epiano", "guitar", "strings", "pad", "harp", "vibes"].includes(s.id)) : G.SOUNDS.filter(s => s.role === role);
     groups.push({ label: G.ROLE_LABEL[role], items: list.map(s => ({ value: role === "chords" ? "chords:" + s.id : s.id, name: s.name })) });
   }
@@ -806,8 +936,8 @@ function openInstSheet(index) {
     const role = roleOf(), list = $("iCtrls"); list.innerHTML = "";
     const ok = G.CONTROLLERS.filter(c => c.roles.includes(role)); if (!ok.some(c => c.id === draft.controller)) draft.controller = ok[0].id;
     for (const c of ok) { const d = document.createElement("div"); d.className = "item"; d.innerHTML = `<div class="grow"><b>${c.name}</b><div class="meta">${c.blurb}</div></div>`; const b = document.createElement("button"); b.textContent = c.id === draft.controller ? "✓ Chosen" : "Use"; b.className = c.id === draft.controller ? "on" : ""; b.onclick = () => { draft.controller = c.id; renderCtrls(); }; d.appendChild(b); list.appendChild(d); }
-    $("iRole").textContent = { voice: "Notes become the sung line of the YuE2 score (one note at a time).", bass: "Notes become the bass line of the YuE2 score.", drums: "Hits go into the drum lanes and shape the bass rhythm.", chords: "Sets the chord of the bar; chord symbols go into the score.", layer: "An extra layer you'll hear on stage and get in the standard ABC. YuE2 reads the voice, chords and bass." }[role];
-    $("iOct").style.visibility = role === "drums" || role === "chords" ? "hidden" : "visible";
+    $("iRole").textContent = { voice: "Notes become the sung line of the YuE2 score (one note at a time).", bass: "Notes become the bass line of the YuE2 score.", drums: "Hits go into the drum lanes and shape the bass rhythm.", chords: "Strikes set the chord symbols in the score, at the moment you strike; the arpeggiator shapes how they sound.", layer: "An extra layer you'll hear on stage and get in the standard ABC. YuE2 reads the voice, chords and bass.", fx: "Risers, downlifters and impacts for the arrangement. They're sound only; the score doesn't carry them." }[role];
+    $("iOct").style.visibility = role === "drums" || role === "fx" ? "hidden" : "visible";
   };
   sel.onchange = () => { if (!$("iName").value || $("iName").value === draft.autoName) { const s = G.SOUND_BY_ID[sel.value.replace("chords:", "")]; $("iName").value = draft.autoName = roleOf() === "chords" ? "Chords" : s.name.split(" (")[0]; } renderCtrls(); };
   if (!i.name) sel.onchange();
@@ -816,7 +946,7 @@ function openInstSheet(index) {
   const sw = $("iColors"); sw.innerHTML = ""; COLORS.forEach(c => { const b = document.createElement("button"); b.className = "swatch" + (c === draft.color ? " on" : ""); b.style.background = c; b.setAttribute("aria-label", "Colour"); b.onclick = () => { draft.color = c; sw.querySelectorAll(".swatch").forEach(x => x.classList.toggle("on", x === b)); }; sw.appendChild(b); });
   $("iSave").onclick = () => {
     const role = roleOf(), sound = sel.value.replace("chords:", "");
-    const next = { id: index >= 0 ? i.id : G.uid(), name: $("iName").value.trim() || G.SOUND_BY_ID[sound].name, sound, role, controller: draft.controller, octave: draft.octave || 0, color: draft.color, kbOct: i.kbOct || 0 };
+    const next = { id: index >= 0 ? i.id : G.uid(), name: $("iName").value.trim() || G.SOUND_BY_ID[sound].name, sound, role, controller: draft.controller, octave: draft.octave || 0, color: draft.color, kbOct: i.kbOct || 0, arp: i.arp, hold: i.hold, chordView: i.chordView };
     if (index >= 0) P.deck[index] = next; else { P.deck.push(next); curInst = P.deck.length - 1; }
     syncSynthDeck(); changed(); renderAll(); closeSheets();
   };

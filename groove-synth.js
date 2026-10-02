@@ -163,7 +163,7 @@ function effectiveProgram(program) { return E.set === "full" || stageHas(program
 function effectiveKit(program) { return E.set === "full" || program === 0 || program === 25 ? program : 0; }
 async function applyPrograms() {
   if (!E.fluid) return;
-  for (const [ch, prog] of E.programs) { E.fluid.midiProgramSelect(ch, E.sfont, 0, effectiveProgram(prog)); E.fluid.midiControl(ch, 91, 40); }
+  for (const [ch, prog] of E.programs) { if (prog < 0) continue; E.fluid.midiProgramSelect(ch, E.sfont, 0, effectiveProgram(prog)); E.fluid.midiControl(ch, 91, 40); }
   E.fluid.midiSetChannelType(9, true); E.fluid.midiProgramSelect(9, E.sfont, 128, effectiveKit(E.drumProgram));
 }
 function channelFor(key) { if (!E.channels.size) setDeck([]); return E.channels.has(key) ? E.channels.get(key) : E.channels.get("voice"); }
@@ -186,6 +186,7 @@ function setVolume(v) { E.volume = v; if (E.master) E.master.gain.value = v * 0.
 function note(ch, midi, t, dur, vel) {
   if (!ensure()) return;
   t = Math.max(t, now()); vel = vel == null ? 0.9 : vel;
+  if (programOf(ch) < 0) { at(t, () => oscFx(programOf(ch), now(), dur, vel)); return; }   // sweeps and hits are synthesised, not sampled
   if (E.engine === "fluid") { at(t, () => E.fluid.midiNoteOn(ch, midi, Math.round(vel * 127))); at(t + Math.max(0.04, dur), () => E.fluid.midiNoteOff(ch, midi)); }
   else { at(t, () => { const v = oscVoice(programOf(ch), midi, now(), vel); v.stop(now() + Math.max(0.04, dur)); }); }
 }
@@ -198,10 +199,29 @@ function drum(gm, t, vel) {
 function noteOn(key, ch, midi, vel) {
   if (!ensure()) return; vel = vel == null ? 0.9 : vel;
   noteOff(key);
+  if (programOf(ch) < 0) { E.live.set(key, oscFx(programOf(ch), now(), 8, vel)); return; }
   if (E.engine === "fluid") { E.fluid.midiNoteOn(ch, midi, Math.round(vel * 127)); E.live.set(key, { stop: () => E.fluid.midiNoteOff(ch, midi) }); }
   else E.live.set(key, oscVoice(programOf(ch), midi, now(), vel));
 }
 function noteOff(key) { const v = E.live.get(key); if (v) { v.stop(now()); E.live.delete(key); } }
+
+// ----- sweeps and hits (always synthesised) -----
+function oscFx(kind, t, dur, vel) {
+  const ac = E.ac, g = ac.createGain(); g.connect(E.master); const stops = [];
+  if (kind === -3) {   // impact: a low boom with a noise splash
+    const o = ac.createOscillator(); o.frequency.setValueAtTime(110, t); o.frequency.exponentialRampToValueAtTime(30, t + 0.6); o.connect(g);
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.9 * vel, t + 0.01); g.gain.exponentialRampToValueAtTime(0.0001, t + 1.4); o.start(t); o.stop(t + 1.5);
+    noiseVoice(t, { hp: 400, peak: 0.5 * vel, decay: 0.5 }); return { stop() { /* one-shot */ } };
+  }
+  const up = kind === -1, src = ac.createBufferSource(); src.buffer = E.noise; src.loop = true;
+  const f = ac.createBiquadFilter(); f.type = "bandpass"; f.Q.value = 1.2; const [f0, f1] = up ? [200, 6000] : [6000, 150];
+  f.frequency.setValueAtTime(f0, t); f.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  const o = ac.createOscillator(); o.type = "sawtooth"; const og = ac.createGain(); og.gain.value = 0.12; o.frequency.setValueAtTime(up ? 110 : 440, t); o.frequency.exponentialRampToValueAtTime(up ? 880 : 55, t + dur); o.connect(og); og.connect(f);
+  src.connect(f); f.connect(g);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.7 * vel, t + (up ? dur * 0.85 : 0.05)); g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.05);
+  src.start(t); o.start(t); src.stop(t + dur + 0.1); o.stop(t + dur + 0.1);
+  return { stop(t1) { g.gain.cancelScheduledValues(t1); g.gain.setTargetAtTime(0.0001, t1, 0.05); try { src.stop(t1 + 0.3); o.stop(t1 + 0.3); } catch (e) { /* already stopped */ } } };
+}
 
 // ----- oscillator fallback -----
 function env(t, peak, decay, g) { g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(peak, t + 0.003); g.gain.exponentialRampToValueAtTime(0.0001, t + decay); }
