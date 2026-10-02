@@ -390,6 +390,7 @@
         <option value="standard">Standard ABC — every instrument, with a drum staff</option>
       </select>
     </div>
+    <label class="row" style="gap:8px"><input id="autoBass" type="checkbox" style="width:auto"> <span>Auto bass line where none is played <span class="muted">(root on kicks, fifth on snares, over the bar's chord; off = the score only has what you played)</span></span></label>
     <div id="check" class="muted"></div>
     <textarea id="abcOut" readonly spellcheck="false" aria-label="ABC notation"></textarea>
     <label class="field"><span>Style for the render (travels in the score PNG)</span><input id="style" type="text" placeholder="e.g. Afrobeats, warm male vocal, log drum, 104 BPM"></label>
@@ -401,7 +402,7 @@
       <button id="openStudio">Open in Score Studio →</button>
       <a href="editor.html" class="chip" style="display:inline-flex; align-items:center; border:1px solid var(--line); text-decoration:none">Score editor →</a>
     </div>
-    <p class="muted"><b>Score PNG</b> packs the score, style and lyrics into an M3DS image for a Graydient job: send it to <code>/wf /run:score-yue2</code> <b>as a file</b> (a photo gets recompressed and breaks it). Or paste the ABC into the chat as <code>abc_text</code>. The vocal line is your Voice instrument; the bass line is what you played on a Bass instrument, or follows the kick and snare. Extra layers appear in the standard ABC only.</p>
+    <p class="muted"><b>Score PNG</b> packs the score, style and lyrics into an M3DS image for a Graydient job: send it to <code>/wf /run:score-yue2</code> <b>as a file</b> (a photo gets recompressed and breaks it). Or paste the ABC into the chat as <code>abc_text</code>. The vocal line is your Voice instrument; the bass line is what you played on a Bass instrument (or, with the option above, an automatic line). Chord strikes and extra layers appear as their own voices in the standard ABC.</p>
   </div>
 </section>
 
@@ -1071,13 +1072,14 @@ $("modeSong").onclick = () => { seq.setMode("song"); $("modeSong").classList.add
 
 // score sheet
 function renderScore() {
-  $("style").value = P.style || ""; $("lyrics").value = P.lyrics || "";
+  $("style").value = P.style || ""; $("lyrics").value = P.lyrics || ""; $("autoBass").checked = !!P.autoBass;
   const abc = G.exportAbc(P, $("flavour").value), r = G.checkAbc(P, abc);
   $("abcOut").value = abc;
   $("check").textContent = r.issues.length ? r.issues.length + " issue(s): " + r.issues.slice(0, 2).join(" ") : r.bars + " bars · bar lengths OK";
   $("check").className = r.issues.length ? "err" : "ok";
 }
 $("flavour").onchange = renderScore;
+$("autoBass").onchange = () => { P.autoBass = $("autoBass").checked; changed(); renderScore(); };
 $("style").oninput = () => { P.style = $("style").value; changed(); };
 $("lyrics").oninput = () => { P.lyrics = $("lyrics").value; changed(); };
 $("copyAbc").onclick = async () => { try { await navigator.clipboard.writeText($("abcOut").value); setStatus("ABC copied.", "ok"); } catch (e) { $("abcOut").select(); setStatus("Select-all and copy from the text box (clipboard blocked).", "warn"); } };

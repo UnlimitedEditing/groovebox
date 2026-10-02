@@ -149,7 +149,7 @@ function demoProject() {
   const b = clone(a); b.id = uid(); b.name = "Groove B"; b.chords = [5, 3, 0, 4];
   b.drums.snare = all([4, 12]); b.drums.clap = all([12]); b.drums.rim = all([3, 7, 11]);
   b.melody = b.melody.map(n => ({ ...n, row: Math.min(14, n.row + 2) }));
-  return { version: 2, name: "Demo groove", title: "Groove Box sketch", bpm: 104, swing: 20, meter: "4/4", grid: 16, key: "C", scale: "major",
+  return { version: 2, name: "Demo groove", title: "Groove Box sketch", bpm: 104, swing: 20, meter: "4/4", grid: 16, key: "C", scale: "major", autoBass: true,
            octave: 0, timbre: "keys", deck: defaultDeck(), patterns: [a, b],
            song: [{ pattern: a.id, repeat: 1, section: "intro" }, { pattern: a.id, repeat: 2, section: "verse" }, { pattern: b.id, repeat: 2, section: "chorus" }] };
 }
@@ -171,7 +171,7 @@ function normalizeProject(p) {
   p.grid = p.grid === 8 ? 8 : 16; p.meter = METERS.includes(p.meter) ? p.meter : "4/4";
   p.style = p.style || ""; p.lyrics = p.lyrics || ""; p.soundSet = p.soundSet === "full" ? "full" : "stage";
   p.bpm = clamp(+p.bpm || 100, 60, 180); p.swing = clamp(+p.swing || 0, 0, 60); p.octave = clamp(+p.octave || 0, -1, 1);
-  p.feel = { ...DEFAULT_FEEL, ...(p.feel || {}) };
+  p.feel = { ...DEFAULT_FEEL, ...(p.feel || {}) }; p.autoBass = !!p.autoBass;
   if (!Array.isArray(p.deck) || !p.deck.length) p.deck = defaultDeck();
   p.deck = (p.deck || []).map(i => i.controller === "bubbles" ? { ...i, controller: "grid" } : i);
   // role: fixed for kits and sweeps; any melodic sound may play as voice, bass, chords or a layer
@@ -287,11 +287,12 @@ function chordEventsAt(P, p, inst, abs) {
   return out;
 }
 function chordSoundingAt(p, abs) { return (p.chordHits || []).some(h => h.step <= abs && abs < h.step + h.len); }
-// Bass for a bar: what the player recorded on a bass instrument, else root on kicks and fifth on snares over the bar's chord.
+// Bass for a bar: what the player recorded on a bass instrument. Only with P.autoBass on does an empty bar get
+// an automatic line (root on kicks, fifth on snares, over the bar's chord).
 function bassEvents(P, p, bar) {
   const n = spb(P), base = bar * n;
   const played = (p.layers && p.layers.bass || []).filter(x => x.step >= base && x.step < base + n).sort((a, b) => a.step - b.step);
-  if (played.length) {
+  if (played.length || !P.autoBass) {
     const out = []; let cursor = 0;
     for (const x of played) { const s = x.step - base; if (s < cursor) continue; out.push({ step: s, midi: x.midi, len: Math.min(x.len, n - s), off: x.off || 0 }); cursor = s + out[out.length - 1].len; }
     return out;
@@ -577,18 +578,22 @@ function exportStandard(P) {
   const k = keyInfo(P), out = header(P, k), layers = layerIds(P);
   out.splice(out.length - 1, 0, ...DRUMS.map(d => `%%percmap ${d.perc} ${d.gm}${d.head ? " " + d.head : ""}`));
   const chordInst = P.deck.find(i => i.role === "chords") || null, hasHits = P.patterns.some(p => (p.chordHits || []).length);
+  const hasBass = P.patterns.some(p => { for (let b = 0; b < p.bars; b++) if (bassEvents(P, p, b).length) return true; return false; });
+  const hasDrums = P.patterns.some(p => DRUMS.some(d => p.drums[d.id].length));
   const voices = layers.map(id => ({ name: (P.deck.find(x => x.id === id) || { name: id }).name, events: p => p.layers[id] || [] }));
   if (hasHits) voices.unshift({ name: chordInst ? chordInst.name : "Chords", events: p => chordLayer(P, p, chordInst) });
-  out.push(`V:1 clef=treble name="Melody"`, `V:2 clef=bass name="Bass"`);
-  voices.forEach((v, i) => out.push(`V:${i + 3} clef=treble name="${v.name.replace(/"/g, "")}"`));
-  out.push(`V:${voices.length + 3} clef=perc name="Drums"`);
+  // voice numbers: 1 melody, 2 bass (if any), then layers, then drums (if any)
+  const vBass = hasBass ? 2 : 0, vLayer0 = hasBass ? 3 : 2, vDrums = hasDrums ? vLayer0 + voices.length : 0;
+  out.push(`V:1 clef=treble name="Melody"`); if (hasBass) out.push(`V:2 clef=bass name="Bass"`);
+  voices.forEach((v, i) => out.push(`V:${vLayer0 + i} clef=treble name="${v.name.replace(/"/g, "")}"`));
+  if (hasDrums) out.push(`V:${vDrums} clef=perc name="Drums"`);
   for (const part of songParts(P)) {
     const bars = sectionBars(P, part);
     out.push(`% ${part.section}`);
     out.push("[V:1]", ...lines(bars.map(([p, b]) => vocalBar(P, p, b, true, k))));
-    out.push("[V:2]", ...lines(bars.map(([p, b]) => insBar(P, p, b, k))));
-    voices.forEach((v, i) => out.push(`[V:${i + 3}]`, ...lines(bars.map(([p, b]) => polyBar(P, v.events(p), b, k)))));
-    out.push(`[V:${voices.length + 3}]`, "%%MIDI channel 10", ...lines(bars.map(([p, b]) => drumBar(P, p, b))));
+    if (hasBass) out.push(`[V:${vBass}]`, ...lines(bars.map(([p, b]) => insBar(P, p, b, k))));
+    voices.forEach((v, i) => out.push(`[V:${vLayer0 + i}]`, ...lines(bars.map(([p, b]) => polyBar(P, v.events(p), b, k)))));
+    if (hasDrums) out.push(`[V:${vDrums}]`, "%%MIDI channel 10", ...lines(bars.map(([p, b]) => drumBar(P, p, b))));
   }
   return out.join("\n") + "\n";
 }
